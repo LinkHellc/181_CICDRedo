@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unzip -l project-bootstrap.zip)",
+      "Bash(unzip:*)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "WebSearch",
+      "Bash(powershell:*)",
+      "Bash(if not exist \"D:\\\\BaiduSyncdisk\\\\4-学习\\\\100-项目\\\\181_CICDRedo\\\\_bmad-output\\\\implementation-artifacts\" mkdir \"D:\\\\BaiduSyncdisk\\\\4-学习\\\\100-项目\\\\181_CICDRedo\\\\_bmad-output\\\\implementation-artifacts\")",
+      "Bash(dir /s /b \"D:\\\\BaiduSyncdisk\\\\4-学习\\\\100-项目\\\\181_CICDRedo\\\\_bmad-output\")",
+      "Bash(findstr:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: MBD_CICDKits project\n\nAdd complete project structure including:\n- PRD, Epics, and Architecture documentation\n- Complete UX Design Specification \\(14-step workflow\\)\n- MATLAB tools \\(genCode.m, A2LTool.m\\)\n- Requirements documentation\n- BMAD workflow configuration\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n\\)\")"
+    ]
+  }
+}
