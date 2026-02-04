@@ -1,0 +1,13 @@
+# Core dependencies
+PyQt6>=6.6.0
+
+# TOML support
+# Python 3.10: tomli for reading
+# Python 3.11+: tomllib is built-in
+tomli>=2.0.0; python_version < "3.11"
+# tomli_w is needed for writing TOML (all versions)
+tomli-w>=1.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-qt>=4.2.0
