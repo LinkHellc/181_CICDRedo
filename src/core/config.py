@@ -6,6 +6,7 @@ following Architecture Decision 1.1 (Configuration Format: TOML).
 
 import logging
 import sys
+import json
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -22,7 +23,7 @@ try:
 except ImportError:
     tomli_w = None
 
-from core.models import ProjectConfig
+from core.models import ProjectConfig, WorkflowConfig
 from utils.errors import (
     ConfigSaveError,
     ConfigValidationError,
@@ -306,3 +307,134 @@ def update_config(project_name: str, updated_config: ProjectConfig) -> bool:
     except Exception as e:
         logger.error(f"更新配置失败: {e}")
         raise ConfigError(f"更新配置失败: {str(e)}")
+
+
+def load_workflow_templates() -> list[WorkflowConfig]:
+    """加载工作流模板配置 (Story 2.1 Task 3)
+
+    从 configs/default_workflow.json 加载预定义的工作流模板。
+
+    Returns:
+        WorkflowConfig 对象列表
+
+    Raises:
+        ConfigLoadError: 文件不存在、格式错误或验证失败时抛出
+    """
+    try:
+        # 获取工作流配置文件路径
+        # 优先使用项目根目录下的 configs，否则使用 src 同级目录
+        project_root = Path(__file__).parent.parent.parent
+        config_path = project_root / "configs" / "default_workflow.json"
+
+        # 备用路径：src/configs/
+        if not config_path.exists():
+            config_path = Path(__file__).parent.parent.parent / "src" / "configs" / "default_workflow.json"
+
+        if not config_path.exists():
+            raise ConfigLoadError(
+                f"工作流配置文件不存在: {config_path}",
+                suggestions=[
+                    "确保 configs/default_workflow.json 文件存在",
+                    "检查文件路径是否正确"
+                ]
+            )
+
+        # 加载 JSON 文件
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ConfigLoadError(
+                f"工作流配置文件格式错误: {e}",
+                suggestions=[
+                    "检查 JSON 文件格式是否正确",
+                    "使用 JSON 验证工具验证文件"
+                ]
+            )
+
+        # 验证基本结构
+        if "templates" not in data:
+            raise ConfigLoadError(
+                "工作流配置缺少 'templates' 字段",
+                suggestions=["确保 JSON 文件包含 'templates' 字段"]
+            )
+
+        if not isinstance(data["templates"], list):
+            raise ConfigLoadError(
+                "'templates' 字段应为列表",
+                suggestions["确保 'templates' 是一个列表"]
+            )
+
+        # 转换为 WorkflowConfig 对象列表
+        templates = []
+        for template_data in data["templates"]:
+            try:
+                workflow = WorkflowConfig.from_dict(template_data)
+                templates.append(workflow)
+            except Exception as e:
+                logger.warning(f"跳过无效的工作流模板: {e}")
+                continue
+
+        if not templates:
+            raise ConfigLoadError(
+                "没有有效的工作流模板",
+                suggestions=["检查 default_workflow.json 中的模板格式"]
+            )
+
+        logger.info(f"已加载 {len(templates)} 个工作流模板")
+        return templates
+
+    except ConfigLoadError:
+        raise
+    except Exception as e:
+        logger.error(f"加载工作流模板失败: {e}")
+        raise ConfigLoadError(str(e))
+
+
+def save_selected_workflow(project_name: str, workflow: WorkflowConfig) -> bool:
+    """保存选中的工作流配置到项目配置 (Story 2.1 Task 6)
+
+    将用户选择的工作流模板 ID 和名称保存到项目配置中。
+
+    Args:
+        project_name: 项目名称
+        workflow: 选中的工作流配置对象
+
+    Returns:
+        bool: 保存是否成功
+
+    Raises:
+        ConfigLoadError: 项目配置不存在时抛出
+        ConfigError: 保存失败时抛出
+    """
+    try:
+        # 加载现有项目配置
+        config = load_config(project_name)
+
+        # 更新工作流字段
+        config.workflow_id = workflow.id
+        config.workflow_name = workflow.name
+
+        # 可选：将完整的工作流配置保存到 custom_params
+        # 这样可以在后续阶段使用详细的阶段配置
+        config.custom_params["workflow_config"] = workflow.to_dict()
+
+        # 更新时间戳
+        from datetime import datetime
+        config.modified_at = datetime.now().isoformat()
+
+        # 保存更新（覆盖模式）
+        result = save_config(config, project_name, overwrite=True)
+
+        if result:
+            logger.info(f"工作流已保存到项目 {project_name}: {workflow.id}")
+        else:
+            logger.error(f"保存工作流到项目 {project_name} 失败")
+
+        return result
+
+    except ConfigLoadError:
+        raise
+    except Exception as e:
+        logger.error(f"保存工作流配置失败: {e}")
+        raise ConfigError(f"保存工作流配置失败: {str(e)}")

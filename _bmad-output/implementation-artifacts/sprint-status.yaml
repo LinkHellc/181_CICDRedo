@@ -51,8 +51,8 @@ development_status:
   epic-1-retrospective: done
 
   # Epic 2: 工作流执行
-  epic-2: backlog
-  2-1-select-predefined-workflow-template: backlog
+  epic-2: in-progress
+  2-1-select-predefined-workflow-template: review
   2-2-load-custom-workflow-config: backlog
   2-3-validate-workflow-config-effectiveness: backlog
   2-4-start-automated-build-process: backlog
