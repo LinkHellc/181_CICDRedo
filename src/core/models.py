@@ -167,7 +167,7 @@ class WorkflowConfig:
     name: str = ""                    # 工作流名称
     description: str = ""             # 工作流描述
     estimated_time: int = 0           # 预计执行时间（分钟）
-    stages: List[StageConfig] = field(default_factory=list)  # 阶段列表
+    stages: List[StageConfig] = _empty_list_factory  # 阶段列表
 
     def to_dict(self) -> dict:
         """转换为字典（包括嵌套的 stages）
@@ -226,7 +226,7 @@ class ValidationError:
     field: str = ""
     message: str = ""
     severity: ValidationSeverity = ValidationSeverity.ERROR
-    suggestions: list = field(default_factory=list)
+    suggestions: list = _empty_list_factory
     stage: str = ""
 
     def to_dict(self) -> dict:
@@ -281,7 +281,7 @@ class ValidationResult:
         error_count: 错误数量
     """
     is_valid: bool = True
-    errors: List[ValidationError] = field(default_factory=list)
+    errors: List[ValidationError] = _empty_list_factory
     warning_count: int = 0
     error_count: int = 0
 
