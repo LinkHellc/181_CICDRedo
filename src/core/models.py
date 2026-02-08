@@ -9,6 +9,10 @@ from dataclasses import fields
 from typing import Optional, List
 from enum import Enum
 
+# 创建默认字段对象（在类外部创建，避免Python 3.11的bug）
+_empty_dict_factory = field(default_factory=dict)
+_empty_list_factory = field(default_factory=list)
+
 
 class ValidationSeverity(Enum):
     """验证严重级别
@@ -50,7 +54,7 @@ class ProjectConfig:
     iar_project_path: str = ""        # IAR 工程路径
 
     # 可选字段（预留 Phase 2 扩展）
-    custom_params: dict = field(default_factory=dict)
+    custom_params: dict = _empty_dict_factory
     created_at: str = ""
     modified_at: str = ""
 
