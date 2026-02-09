@@ -22,8 +22,10 @@ from PyQt6.QtGui import QAction, QFont, QIcon
 
 from core.config import list_saved_projects, load_config
 from utils.errors import ConfigLoadError
-from core.models import ProjectConfig
+from core.models import ProjectConfig, WorkflowConfig
+from core.workflow import validate_workflow_config
 from ui.dialogs.new_project_dialog import NewProjectDialog
+from ui.dialogs.validation_result_dialog import show_validation_result
 from ui.styles.industrial_theme import apply_industrial_theme, BrandColors, FontManager
 
 logger = logging.getLogger(__name__)
@@ -196,6 +198,13 @@ class MainWindow(QMainWindow):
             select_row.addWidget(btn)
 
         layout.addLayout(select_row)
+
+        # 验证配置按钮
+        self.validate_btn = QPushButton("🔍 验证配置")
+        self.validate_btn.setMinimumHeight(48)
+        self.validate_btn.setEnabled(False)
+        self.validate_btn.clicked.connect(self._validate_config)
+        layout.addWidget(self.validate_btn)
 
         # 构建按钮（大号主要按钮）
         self.build_btn = QPushButton("🚀 开始构建")
@@ -435,7 +444,8 @@ class MainWindow(QMainWindow):
         self.path_labels["target_path"].setText(config.target_path)
         self.path_labels["iar_project_path"].setText(config.iar_project_path)
 
-        # 启用"开始构建"按钮
+        # 启用"验证配置"和"开始构建"按钮
+        self.validate_btn.setEnabled(True)
         self.build_btn.setEnabled(True)
 
         # 保存当前配置
@@ -455,6 +465,7 @@ class MainWindow(QMainWindow):
         for input_field in self.path_labels.values():
             input_field.clear()
 
+        self.validate_btn.setEnabled(False)
         self.build_btn.setEnabled(False)
         self._current_config = None
         self.last_build_label.setText("—")
@@ -492,10 +503,96 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.warning(self, "⚠️ 删除失败", f"无法删除项目: {project_name}")
 
+    def _validate_config(self):
+        """验证工作流配置（Story 2.3 Task 7）"""
+        if not self._current_config:
+            QMessageBox.warning(self, "⚠️ 未加载项目", "请先加载一个项目配置。")
+            return
+
+        try:
+            self.status_bar.showMessage("🔍 正在验证配置...")
+
+            # 获取工作流配置（如果有）
+            # 优先使用 custom_params 中的 workflow_config
+            workflow_config = None
+            if "workflow_config" in self._current_config.custom_params:
+                workflow_data = self._current_config.custom_params["workflow_config"]
+                workflow_config = WorkflowConfig.from_dict(workflow_data)
+            else:
+                # 如果没有自定义工作流，创建一个默认的空配置
+                workflow_config = WorkflowConfig(
+                    id="default",
+                    name="默认工作流",
+                    description="默认工作流配置",
+                    estimated_time=0,
+                    stages=[]
+                )
+
+            # 执行验证
+            result = validate_workflow_config(workflow_config, self._current_config)
+
+            # 显示验证结果
+            show_validation_result(result, self)
+
+            # 如果验证失败，禁用构建按钮
+            if not result.is_valid:
+                self.build_btn.setEnabled(False)
+                self.status_bar.showMessage(f"❌ 验证失败: {result.error_count} 个错误")
+                logger.warning(f"配置验证失败: {result.error_count} 个错误")
+            else:
+                self.build_btn.setEnabled(True)
+                if result.warning_count > 0:
+                    self.status_bar.showMessage(f"✅ 验证通过（有警告）: {result.warning_count} 个警告")
+                    logger.info(f"配置验证通过但有警告: {result.warning_count} 个警告")
+                else:
+                    self.status_bar.showMessage("✅ 验证通过")
+                    logger.info("配置验证通过")
+
+        except Exception as e:
+            logger.error(f"验证配置时发生错误: {e}")
+            QMessageBox.critical(
+                self,
+                "❌ 验证失败",
+                f"验证配置时发生错误:\n\n{str(e)}\n\n"
+                "请查看日志获取详细信息。"
+            )
+
     def _start_build(self):
         """开始构建流程"""
         if self._current_config:
+            # 在开始构建前自动验证配置（Story 2.3 Task 7.4）
+            self.status_bar.showMessage("🔍 开始前验证配置...")
+
+            # 获取工作流配置
+            workflow_config = None
+            if "workflow_config" in self._current_config.custom_params:
+                workflow_data = self._current_config.custom_params["workflow_config"]
+                workflow_config = WorkflowConfig.from_dict(workflow_data)
+            else:
+                workflow_config = WorkflowConfig(
+                    id="default",
+                    name="默认工作流",
+                    description="默认工作流配置",
+                    estimated_time=0,
+                    stages=[]
+                )
+
+            # 执行验证
+            result = validate_workflow_config(workflow_config, self._current_config)
+
+            # 如果验证失败，显示错误并阻止构建（Story 2.3 Task 7.5）
+            if not result.is_valid:
+                show_validation_result(result, self)
+                self.build_btn.setEnabled(False)
+                self.status_bar.showMessage("❌ 配置验证失败，请修复错误后重试")
+                logger.warning(f"构建被阻止: 配置验证失败 ({result.error_count} 个错误)")
+                return
+
+            # 验证通过，开始构建流程
+            self.build_btn.setEnabled(True)
             self.status_bar.showMessage("🚀 构建流程启动...")
+            logger.info("构建流程启动")
+
             # TODO: 实现实际的构建流程
             QMessageBox.information(
                 self,

@@ -1,0 +1,408 @@
+"""Workflow validation module for MBD_CICDKits.
+
+This module implements workflow configuration validation following
+Architecture Decision 1.3 (Configuration Validation).
+"""
+
+import logging
+from pathlib import Path
+from typing import List, Dict, Set
+
+from core.models import (
+    WorkflowConfig,
+    ProjectConfig,
+    ValidationError,
+    ValidationResult,
+    ValidationSeverity
+)
+
+logger = logging.getLogger(__name__)
+
+# 默认超时值（秒）
+DEFAULT_TIMEOUT = 300
+
+# 阶段依赖规则（Story 2.3 Task 2.2）
+STAGE_DEPENDENCIES = {
+    "matlab_gen": [],           # 无依赖
+    "file_process": ["matlab_gen"],  # 依赖 matlab_gen
+    "iar_compile": ["file_process"], # 依赖 file_process
+    "a2l_process": ["iar_compile"], # 依赖 iar_compile
+    "package": ["iar_compile", "a2l_process"]  # 依赖 iar_compile 和 a2l_process
+}
+
+# 阶段执行顺序（用于检查顺序合理性）
+STAGE_ORDER = [
+    "matlab_gen",
+    "file_process",
+    "iar_compile",
+    "a2l_process",
+    "package"
+]
+
+# 必需参数规则（Story 2.3 Task 3.2）
+REQUIRED_PARAMS = {
+    "matlab_gen": ["simulink_path", "matlab_code_path"],
+    "file_process": ["matlab_code_path", "target_path"],
+    "iar_compile": ["iar_project_path", "matlab_code_path"],
+    "a2l_process": ["a2l_path", "target_path"],
+    "package": ["target_path"]
+}
+
+
+def validate_stage_dependencies(workflow_config: WorkflowConfig) -> List[ValidationError]:
+    """验证阶段依赖关系 (Story 2.3 Task 2)
+
+    Args:
+        workflow_config: 工作流配置对象
+
+    Returns:
+        验证错误列表（空列表表示通过）
+    """
+    errors = []
+
+    if not workflow_config.stages:
+        logger.warning("工作流没有配置任何阶段")
+        return errors
+
+    # 获取所有启用阶段的名称
+    enabled_stages = {stage.name for stage in workflow_config.stages if stage.enabled}
+
+    if not enabled_stages:
+        error = ValidationError(
+            field="workflow.stages",
+            message="至少需要启用一个阶段",
+            severity=ValidationSeverity.ERROR,
+            suggestions=[
+                "启用至少一个工作流阶段",
+                "检查工作流配置"
+            ]
+        )
+        errors.append(error)
+        return errors
+
+    # 检查每个启用阶段的依赖（Task 2.3）
+    for stage in workflow_config.stages:
+        if not stage.enabled:
+            continue
+
+        if stage.name not in STAGE_DEPENDENCIES:
+            # 未知阶段，跳过或警告
+            logger.warning(f"未知阶段: {stage.name}")
+            continue
+
+        dependencies = STAGE_DEPENDENCIES[stage.name]
+
+        # 检查依赖阶段是否启用
+        for dep_stage in dependencies:
+            if dep_stage not in enabled_stages:
+                error = ValidationError(
+                    field=f"workflow.stages.{stage.name}.enabled",
+                    message=f'阶段 "{stage.name}" 已启用，但依赖阶段 "{dep_stage}" 未启用',
+                    severity=ValidationSeverity.ERROR,
+                    suggestions=[
+                        f'启用 "{dep_stage}" 阶段',
+                        f'禁用 "{stage.name}" 阶段'
+                    ],
+                    stage=stage.name
+                )
+                errors.append(error)
+                logger.warning(f"阶段依赖检查失败: {error.message}")
+
+    # 检查阶段执行顺序是否合理（Task 2.4）
+    enabled_stage_names = [stage.name for stage in workflow_config.stages if stage.enabled]
+    order_errors = _check_stage_order(enabled_stage_names)
+    errors.extend(order_errors)
+
+    return errors
+
+
+def _check_stage_order(stage_names: List[str]) -> List[ValidationError]:
+    """检查阶段执行顺序是否合理
+
+    Args:
+        stage_names: 启用的阶段名称列表
+
+    Returns:
+        顺序错误列表
+    """
+    errors = []
+
+    # 创建阶段名称到顺序索引的映射
+    order_index = {stage: idx for idx, stage in enumerate(STAGE_ORDER)}
+
+    # 检查是否违反依赖顺序
+    # 对于每个阶段，确保其依赖阶段在前面
+    for i, stage in enumerate(stage_names):
+        if stage not in order_index:
+            continue  # 未知阶段，跳过
+
+        # 检查前面的所有阶段
+        for j in range(i):
+            prev_stage = stage_names[j]
+            if prev_stage not in order_index:
+                continue
+
+            # 如果前面的阶段应该在当前阶段之后，则顺序错误
+            if order_index[prev_stage] > order_index[stage]:
+                # 但如果它们没有直接依赖关系，可能不是错误
+                # 只有当前阶段依赖于前面的某个更前面的阶段时才报错
+                if stage in STAGE_DEPENDENCIES:
+                    for dep in STAGE_DEPENDENCIES[stage]:
+                        if dep in stage_names[:j]:
+                            error = ValidationError(
+                                field="workflow.stages",
+                                message=f'阶段执行顺序不合理: "{prev_stage}" 应在 "{stage}" 之前',
+                                severity=ValidationSeverity.WARNING,
+                                suggestions=[
+                                    '调整阶段执行顺序',
+                                    '检查阶段依赖关系'
+                                ],
+                                stage=stage
+                            )
+                            errors.append(error)
+                            break
+
+    return errors
+
+
+def validate_required_params(workflow_config: WorkflowConfig, project_config: ProjectConfig) -> List[ValidationError]:
+    """验证必需参数 (Story 2.3 Task 3)
+
+    Args:
+        workflow_config: 工作流配置对象
+        project_config: 项目配置对象
+
+    Returns:
+        验证错误列表（空列表表示通过）
+    """
+    errors = []
+
+    if not workflow_config.stages:
+        return errors
+
+    # 将项目配置转换为字典便于访问
+    config_dict = project_config.to_dict()
+
+    # 检查每个启用阶段的必需参数（Task 3.3）
+    for stage in workflow_config.stages:
+        if not stage.enabled:
+            continue
+
+        if stage.name not in REQUIRED_PARAMS:
+            logger.warning(f"未知阶段: {stage.name}")
+            continue
+
+        required = REQUIRED_PARAMS[stage.name]
+
+        # 检查必需参数是否存在
+        for param in required:
+            param_value = config_dict.get(param, "")
+
+            # 处理 Path 对象
+            if isinstance(param_value, Path):
+                param_value = str(param_value)
+
+            if not param_value or (isinstance(param_value, str) and not param_value.strip()):
+                # 参数未配置或为空
+                error = ValidationError(
+                    field=f"project_config.{param}",
+                    message=f'阶段 "{stage.name}" 需要参数 "{param}"，但未配置',
+                    severity=ValidationSeverity.ERROR,
+                    suggestions=[
+                        f'在项目配置中设置 {param}',
+                        f'确保 {param} 指向有效的路径或配置'
+                    ],
+                    stage=stage.name
+                )
+                errors.append(error)
+                logger.warning(f"必需参数检查失败: {error.message}")
+
+        # 验证超时参数的有效性（Task 3.4）
+        if stage.timeout <= 0:
+            error = ValidationError(
+                field=f"workflow.stages.{stage.name}.timeout",
+                message=f'阶段 "{stage.name}" 的超时值无效: {stage.timeout} 秒',
+                severity=ValidationSeverity.ERROR,
+                suggestions=[
+                    '设置超时值为正整数（建议 300 秒以上）',
+                    '检查工作流配置文件'
+                ],
+                stage=stage.name
+            )
+            errors.append(error)
+            logger.warning(f"超时值检查失败: {error.message}")
+
+    return errors
+
+
+def validate_paths_exist(project_config: ProjectConfig) -> List[ValidationError]:
+    """验证路径存在性 (Story 2.3 Task 4)
+
+    Args:
+        project_config: 项目配置对象
+
+    Returns:
+        验证错误列表（空列表表示通过）
+    """
+    errors = []
+
+    # 将配置转换为字典
+    config_dict = project_config.to_dict()
+
+    # 路径字段列表（Task 4.2）
+    path_fields = [
+        "simulink_path",
+        "matlab_code_path",
+        "iar_project_path",
+        "a2l_path",
+        "target_path"
+    ]
+
+    # 检查每个路径字段（Task 4.3）
+    for field_name in path_fields:
+        path_value = config_dict.get(field_name, "")
+
+        # 处理 Path 对象和字符串
+        if isinstance(path_value, Path):
+            path_str = str(path_value)
+            path_obj = path_value
+        elif isinstance(path_value, str):
+            path_str = path_value
+            if not path_str.strip():
+                # 路径为空，跳过（由必需参数验证处理）
+                continue
+            path_obj = Path(path_str)
+        else:
+            # 路径为其他类型，跳过
+            continue
+
+        # 检查路径是否存在
+        if not path_obj.exists():
+            error = ValidationError(
+                field=f"project_config.{field_name}",
+                message=f'路径不存在: {path_str}',
+                severity=ValidationSeverity.ERROR,
+                suggestions=[
+                    '检查路径拼写是否正确',
+                    '确认目录/文件是否已创建',
+                    '使用浏览按钮选择正确的路径',
+                    '如果是网络路径，检查网络连接'
+                ]
+            )
+            errors.append(error)
+            logger.warning(f"路径不存在: {path_str}")
+        else:
+            # 路径存在，检查类型是否正确
+            # 对于 a2l_path 和 iar_project_path，应该是文件
+            # 对于其他路径（simulink_path, matlab_code_path, target_path），应该是目录
+            if field_name in ["a2l_path", "iar_project_path"] and not path_obj.is_file():
+                error = ValidationError(
+                    field=f"project_config.{field_name}",
+                    message=f'{field_name} 应该是文件，但指向了目录: {path_str}',
+                    severity=ValidationSeverity.ERROR,
+                    suggestions=[
+                        f'选择正确的文件而不是目录',
+                        '检查路径是否正确'
+                    ]
+                )
+                errors.append(error)
+            elif field_name not in ["a2l_path", "iar_project_path"] and not path_obj.is_dir():
+                error = ValidationError(
+                    field=f"project_config.{field_name}",
+                    message=f'路径应该是目录，但指向了文件: {path_str}',
+                    severity=ValidationSeverity.ERROR,
+                    suggestions=[
+                        '选择目录而不是文件',
+                        '检查路径是否正确'
+                    ]
+                )
+                errors.append(error)
+
+    return errors
+
+
+def validate_workflow_config(workflow_config: WorkflowConfig, project_config: ProjectConfig) -> ValidationResult:
+    """统一验证入口 (Story 2.3 Task 5)
+
+    依次调用所有验证函数，收集所有验证错误到 ValidationResult。
+
+    Args:
+        workflow_config: 工作流配置对象
+        project_config: 项目配置对象
+
+    Returns:
+        验证结果对象（包含错误列表和统计信息）
+    """
+    result = ValidationResult(is_valid=True)
+
+    logger.info("开始验证工作流配置...")
+
+    # 1. 验证阶段依赖关系（Task 5.2）
+    logger.debug("验证阶段依赖关系...")
+    dependency_errors = validate_stage_dependencies(workflow_config)
+    for error in dependency_errors:
+        result.add_error(error)
+
+    # 2. 验证必需参数（Task 5.2）
+    logger.debug("验证必需参数...")
+    param_errors = validate_required_params(workflow_config, project_config)
+    for error in param_errors:
+        result.add_error(error)
+
+    # 3. 验证路径存在性（Task 5.2）
+    logger.debug("验证路径存在性...")
+    path_errors = validate_paths_exist(project_config)
+    for error in path_errors:
+        result.add_error(error)
+
+    # 统计验证结果
+    if result.error_count > 0:
+        logger.warning(f"验证失败: 发现 {result.error_count} 个错误, {result.warning_count} 个警告")
+        result.is_valid = False
+    elif result.warning_count > 0:
+        logger.info(f"验证通过（有警告）: {result.warning_count} 个警告")
+    else:
+        logger.info("验证通过: 无错误")
+
+    return result
+
+
+def get_stage_dependency_info(stage_name: str) -> Dict:
+    """获取阶段的依赖信息
+
+    Args:
+        stage_name: 阶段名称
+
+    Returns:
+        依赖信息字典，包含依赖阶段列表和描述
+    """
+    if stage_name not in STAGE_DEPENDENCIES:
+        return {
+            "dependencies": [],
+            "description": "未知阶段"
+        }
+
+    deps = STAGE_DEPENDENCIES[stage_name]
+
+    # 生成依赖描述
+    if not deps:
+        description = "无依赖，可以独立执行"
+    else:
+        description = f"依赖阶段: {', '.join(deps)}"
+
+    return {
+        "dependencies": deps,
+        "description": description
+    }
+
+
+def get_required_params_info(stage_name: str) -> List[str]:
+    """获取阶段所需的参数列表
+
+    Args:
+        stage_name: 阶段名称
+
+    Returns:
+        必需参数名称列表
+    """
+    return REQUIRED_PARAMS.get(stage_name, [])
