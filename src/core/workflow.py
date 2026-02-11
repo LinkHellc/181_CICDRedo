@@ -1,19 +1,24 @@
-"""Workflow validation module for MBD_CICDKits.
+"""Workflow validation and execution module for MBD_CICDKits.
 
 This module implements workflow configuration validation following
-Architecture Decision 1.3 (Configuration Validation).
+Architecture Decision 1.3 (Configuration Validation) and workflow execution
+following Architecture Decision 1.1 (Stage Interface Pattern).
 """
 
 import logging
+import time
 from pathlib import Path
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Optional, Callable
 
 from core.models import (
     WorkflowConfig,
     ProjectConfig,
     ValidationError,
     ValidationResult,
-    ValidationSeverity
+    ValidationSeverity,
+    BuildContext,
+    StageResult,
+    StageStatus
 )
 
 logger = logging.getLogger(__name__)
@@ -406,3 +411,115 @@ def get_required_params_info(stage_name: str) -> List[str]:
         必需参数名称列表
     """
     return REQUIRED_PARAMS.get(stage_name, [])
+
+
+def execute_workflow(
+    workflow_config: WorkflowConfig,
+    context: BuildContext,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+    stage_callback: Optional[Callable[[str, bool], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None
+) -> bool:
+    """执行工作流 (Story 2.4 Task 2)
+
+    按顺序执行工作流中所有启用的阶段。
+
+    Architecture Decision 1.1:
+    - 统一阶段签名
+    - 按顺序执行阶段
+    - 阶段间通过 BuildContext 传递状态
+
+    Architecture Decision 2.1:
+    - 使用 time.monotonic() 记录时间
+    - 支持取消检查
+
+    Args:
+        workflow_config: 工作流配置
+        context: 构建上下文
+        progress_callback: 进度回调 (百分比, 消息)
+        stage_callback: 阶段完成回调 (阶段名, 成功)
+        cancel_check: 取消检查回调
+
+    Returns:
+        bool: 是否全部成功
+    """
+    # 记录开始时间 - 使用 monotonic 避免系统时间调整影响
+    start_time = time.monotonic()
+    context.state["build_start_time"] = start_time
+
+    logger.info(f"开始执行工作流: {workflow_config.name}")
+    context.log(f"工作流开始: {workflow_config.name}")
+
+    # 获取启用的阶段 (按顺序)
+    enabled_stages = [
+        s for s in workflow_config.stages
+        if s.enabled
+    ]
+
+    if not enabled_stages:
+        logger.warning("没有启用的阶段")
+        context.log("警告: 没有启用的阶段")
+        return False
+
+    total_stages = len(enabled_stages)
+
+    # 执行每个阶段
+    for i, stage_config in enumerate(enabled_stages):
+        # 检查取消
+        if cancel_check and cancel_check():
+            logger.info("工作流被取消")
+            context.log("工作流已被用户取消")
+            context.state["cancel_reason"] = "user_requested"
+            return False
+
+        # 更新进度
+        stage_name = stage_config.name
+        progress = int((i / total_stages) * 100)
+
+        if progress_callback:
+            progress_callback(progress, f"执行阶段: {stage_name}")
+
+        logger.info(f"开始执行阶段 {i+1}/{total_stages}: {stage_name}")
+
+        # TODO: 实际执行阶段 (当前为占位实现)
+        # 后续Story (2.5-2.12) 会实现具体阶段
+        # from stages.base import execute_stage
+        # result = execute_stage(stage_config, context, stage_impl=...)
+
+        # 占位: 模拟阶段执行成功
+        context.log(f"阶段 {stage_name} 执行中 (占位实现)...")
+        result = StageResult(
+            status=StageStatus.COMPLETED,
+            message=f"阶段 {stage_name} 执行成功 (占位实现)"
+        )
+
+        # 通知阶段完成
+        if stage_callback:
+            stage_callback(stage_name, result.status == StageStatus.COMPLETED)
+
+        # 检查阶段是否失败
+        if result.status == StageStatus.FAILED:
+            logger.error(f"阶段 {stage_name} 失败: {result.message}")
+            context.log(f"阶段 {stage_name} 失败: {result.message}")
+            context.state["failed_stage"] = stage_name
+            context.state["failure_reason"] = result.message
+
+            if progress_callback:
+                progress_callback(progress, f"阶段失败: {stage_name}")
+
+            return False
+
+        # 保存阶段输出到上下文
+        context.state[f"{stage_name}_output"] = result.output_files or []
+
+    # 计算总执行时间
+    elapsed = time.monotonic() - start_time
+    context.state["build_duration"] = elapsed
+
+    logger.info(f"工作流执行完成，耗时: {elapsed:.2f} 秒")
+    context.log(f"工作流执行完成，耗时: {elapsed:.2f} 秒")
+
+    if progress_callback:
+        progress_callback(100, "工作流完成")
+
+    return True

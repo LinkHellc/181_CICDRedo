@@ -4,14 +4,14 @@ This module defines dataclass-based models for project configuration
 following Architecture Decision 1.2 (Lightweight Data Containers).
 """
 
-from dataclasses import dataclass, field
-from dataclasses import fields
+import dataclasses
+from dataclasses import dataclass, fields
 from typing import Optional, List
 from enum import Enum
 
 # 创建默认字段对象（在类外部创建，避免Python 3.11的bug）
-_empty_dict_factory = field(default_factory=dict)
-_empty_list_factory = field(default_factory=list)
+_empty_dict_factory = dataclasses.field(default_factory=dict)
+_empty_list_factory = dataclasses.field(default_factory=list)
 
 
 class ValidationSeverity(Enum):
@@ -167,7 +167,7 @@ class WorkflowConfig:
     name: str = ""                    # 工作流名称
     description: str = ""             # 工作流描述
     estimated_time: int = 0           # 预计执行时间（分钟）
-    stages: List[StageConfig] = _empty_list_factory  # 阶段列表
+    stages: List[StageConfig] = dataclasses.field(default_factory=list)  # 阶段列表
 
     def to_dict(self) -> dict:
         """转换为字典（包括嵌套的 stages）
@@ -226,7 +226,7 @@ class ValidationError:
     field: str = ""
     message: str = ""
     severity: ValidationSeverity = ValidationSeverity.ERROR
-    suggestions: list = _empty_list_factory
+    suggestions: list = dataclasses.field(default_factory=list)
     stage: str = ""
 
     def to_dict(self) -> dict:
@@ -263,6 +263,137 @@ class ValidationError:
         return cls(**filtered_data)
 
 
+class StageStatus(Enum):
+    """阶段执行状态
+
+    用于表示工作流中单个阶段的执行状态。
+
+    Attributes:
+        PENDING: 待执行
+        RUNNING: 执行中
+        COMPLETED: 已完成
+        FAILED: 失败
+        CANCELLED: 已取消
+    """
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class StageResult:
+    """阶段执行结果
+
+    表示工作流中单个阶段的执行结果。
+
+    Architecture Decision 1.2:
+    - 所有字段提供默认值
+    - 支持序列化/反序列化
+    - 使用 field(default_factory=...) 避免可变默认值陷阱
+
+    Attributes:
+        status: 执行状态
+        message: 状态消息
+        output_files: 输出文件列表
+        error: 异常对象（如果失败）
+        suggestions: 修复建议列表
+        execution_time: 执行时间（秒）
+    """
+    status: StageStatus = StageStatus.PENDING
+    message: str = ""
+    output_files: List[str] = dataclasses.field(default_factory=list)
+    error: Optional[Exception] = None
+    suggestions: List[str] = dataclasses.field(default_factory=list)
+    execution_time: float = 0.0
+
+    def to_dict(self) -> dict:
+        """转换为字典
+
+        Returns:
+            阶段结果字典
+        """
+        return {
+            "status": self.status.value,
+            "message": self.message,
+            "output_files": self.output_files,
+            "error": str(self.error) if self.error else None,
+            "suggestions": self.suggestions,
+            "execution_time": self.execution_time
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "StageResult":
+        """从字典创建阶段结果对象
+
+        Args:
+            data: 阶段结果字典
+
+        Returns:
+            StageResult 实例
+        """
+        valid_fields = {f.name for f in fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+
+        # 处理 status 字符串到枚举的转换
+        if "status" in filtered_data and isinstance(filtered_data["status"], str):
+            filtered_data["status"] = StageStatus(filtered_data["status"])
+
+        return cls(**filtered_data)
+
+
+@dataclass
+class BuildContext:
+    """构建上下文 - 在阶段间传递状态
+
+    用于在工作流执行期间在各个阶段之间传递状态和数据。
+
+    Architecture Decision 1.2:
+    - config: 只读全局配置
+    - state: 可写阶段状态（用于传递）
+    - log_callback: 统一日志接口
+
+    Attributes:
+        config: 全局配置字典（只读）
+        state: 阶段间传递的状态字典（可写）
+        log_callback: 日志回调函数
+    """
+    config: dict = dataclasses.field(default_factory=dict)
+    state: dict = dataclasses.field(default_factory=dict)
+    log_callback: Optional[callable] = None
+
+    def get(self, key: str, default=None):
+        """从状态中获取值
+
+        Args:
+            key: 键名
+            default: 默认值
+
+        Returns:
+            状态值
+        """
+        return self.state.get(key, default)
+
+    def set(self, key: str, value):
+        """设置状态值
+
+        Args:
+            key: 键名
+            value: 值
+        """
+        self.state[key] = value
+
+    def log(self, message: str):
+        """记录日志
+
+        Args:
+            message: 日志消息
+        """
+        if self.log_callback:
+            self.log_callback(message)
+
+
 @dataclass
 class ValidationResult:
     """验证结果
@@ -281,7 +412,7 @@ class ValidationResult:
         error_count: 错误数量
     """
     is_valid: bool = True
-    errors: List[ValidationError] = _empty_list_factory
+    errors: List[ValidationError] = dataclasses.field(default_factory=list)
     warning_count: int = 0
     error_count: int = 0
 

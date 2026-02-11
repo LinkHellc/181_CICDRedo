@@ -7,6 +7,8 @@ Updated with Anthropic Brand Theme (v3.0 - 2026-02-07)
 - Anthropic 品牌配色（橙色系）
 - Poppins/Lora 字体系统
 - 智能 fallback 机制
+
+Story 2.4: Added WorkflowThread for background workflow execution.
 """
 
 import logging
@@ -17,13 +19,13 @@ from PyQt6.QtWidgets import (
     QGridLayout, QLabel, QLineEdit, QPushButton, QComboBox,
     QMessageBox, QStatusBar, QDialog, QFrame, QScrollArea
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QSize, QThread
 from PyQt6.QtGui import QAction, QFont, QIcon
 
 from core.config import list_saved_projects, load_config
 from utils.errors import ConfigLoadError
-from core.models import ProjectConfig, WorkflowConfig
-from core.workflow import validate_workflow_config
+from core.models import ProjectConfig, WorkflowConfig, BuildContext
+from core.workflow import validate_workflow_config, execute_workflow
 from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.validation_result_dialog import show_validation_result
 from ui.styles.industrial_theme import apply_industrial_theme, BrandColors, FontManager
@@ -186,6 +188,7 @@ class MainWindow(QMainWindow):
         # 操作按钮组
         for text, prop, callback in [
             ("➕ 新建", None, self._new_project),
+            ("✏️ 编辑", None, self._edit_project),
             ("🗑 删除", "danger", self._delete_project),
         ]:
             btn = QPushButton(text)
@@ -213,6 +216,14 @@ class MainWindow(QMainWindow):
         self.build_btn.setEnabled(False)
         self.build_btn.clicked.connect(self._start_build)
         layout.addWidget(self.build_btn)
+
+        # 取消按钮（初始隐藏，Story 2.4 Task 6.1）
+        self.cancel_btn = QPushButton("⏸️ 取消构建")
+        self.cancel_btn.setProperty("danger", True)
+        self.cancel_btn.setMinimumHeight(48)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self._cancel_build)
+        layout.addWidget(self.cancel_btn)
 
         return card
 
@@ -503,6 +514,36 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.warning(self, "⚠️ 删除失败", f"无法删除项目: {project_name}")
 
+    def _edit_project(self):
+        """打开编辑项目配置对话框（Story 1.4 任务 4.2）"""
+        current_data = self.project_combo.currentData()
+        if current_data is None:
+            QMessageBox.warning(self, "⚠️ 未选择项目", "请先选择要编辑的项目。")
+            return
+
+        project_name = current_data
+
+        # 加载当前配置
+        try:
+            config = load_config(project_name)
+        except ConfigLoadError as e:
+            QMessageBox.warning(
+                self,
+                "⚠️ 加载失败",
+                f"无法加载项目配置: {project_name}\n\n{str(e)}"
+            )
+            return
+
+        # 打开编辑对话框
+        dialog = NewProjectDialog(self, edit_mode=True)
+        dialog.set_config(config)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # 编辑成功后刷新项目列表并重新加载
+            self._refresh_project_list()
+            # 重新加载配置到 UI
+            self._load_project_to_ui(project_name)
+            logger.info(f"项目配置已编辑: {project_name}")
+
     def _validate_config(self):
         """验证工作流配置（Story 2.3 Task 7）"""
         if not self._current_config:
@@ -558,53 +599,181 @@ class MainWindow(QMainWindow):
             )
 
     def _start_build(self):
-        """开始构建流程"""
-        if self._current_config:
-            # 在开始构建前自动验证配置（Story 2.3 Task 7.4）
-            self.status_bar.showMessage("🔍 开始前验证配置...")
+        """开始构建流程 (Story 2.4 Task 3, 7)"""
+        if not self._current_config:
+            QMessageBox.warning(self, "⚠️ 未加载项目", "请先加载一个项目配置。")
+            return
 
-            # 获取工作流配置
-            workflow_config = None
-            if "workflow_config" in self._current_config.custom_params:
-                workflow_data = self._current_config.custom_params["workflow_config"]
-                workflow_config = WorkflowConfig.from_dict(workflow_data)
-            else:
-                workflow_config = WorkflowConfig(
-                    id="default",
-                    name="默认工作流",
-                    description="默认工作流配置",
-                    estimated_time=0,
-                    stages=[]
-                )
+        # 防止重复启动 (Story 2.4 Task 3.3)
+        if hasattr(self, '_is_building') and self._is_building:
+            QMessageBox.warning(self, "⚠️ 构建进行中", "已有构建在运行中。")
+            return
 
-            # 执行验证
-            result = validate_workflow_config(workflow_config, self._current_config)
+        # 在开始构建前自动验证配置（Story 2.3 Task 7.4, Story 2.4 Task 7）
+        self.status_bar.showMessage("🔍 开始前验证配置...")
 
-            # 如果验证失败，显示错误并阻止构建（Story 2.3 Task 7.5）
-            if not result.is_valid:
-                show_validation_result(result, self)
-                self.build_btn.setEnabled(False)
-                self.status_bar.showMessage("❌ 配置验证失败，请修复错误后重试")
-                logger.warning(f"构建被阻止: 配置验证失败 ({result.error_count} 个错误)")
-                return
+        # 获取工作流配置
+        workflow_config = None
+        if "workflow_config" in self._current_config.custom_params:
+            workflow_data = self._current_config.custom_params["workflow_config"]
+            workflow_config = WorkflowConfig.from_dict(workflow_data)
+        else:
+            workflow_config = WorkflowConfig(
+                id="default",
+                name="默认工作流",
+                description="默认工作流配置",
+                estimated_time=0,
+                stages=[]
+            )
 
-            # 验证通过，开始构建流程
-            self.build_btn.setEnabled(True)
-            self.status_bar.showMessage("🚀 构建流程启动...")
-            logger.info("构建流程启动")
+        # 执行验证 (Story 2.4 Task 7.1)
+        result = validate_workflow_config(workflow_config, self._current_config)
 
-            # TODO: 实现实际的构建流程
+        # 如果验证失败，显示错误并阻止构建（Story 2.3 Task 7.5, Story 2.4 Task 7.2）
+        if not result.is_valid:
+            show_validation_result(result, self)
+            self.build_btn.setEnabled(False)
+            self.status_bar.showMessage("❌ 配置验证失败，请修复错误后重试")
+            logger.warning(f"构建被阻止: 配置验证失败 ({result.error_count} 个错误)")
+            return
+
+        # 验证通过，开始构建流程
+        self.build_btn.setEnabled(True)
+
+        # 锁定UI (Story 2.4 Task 3.1)
+        self._lock_config_ui()
+        self._is_building = True
+
+        # 创建工作流线程 (Story 2.4 Task 1)
+        self._workflow_thread = WorkflowThread(
+            self._current_config,
+            workflow_config
+        )
+
+        # 连接信号 - 使用 QueuedConnection 确保线程安全 (Story 2.4 Task 4.1)
+        self._workflow_thread.progress_update.connect(
+            self._on_progress_update,
+            Qt.ConnectionType.QueuedConnection
+        )
+        self._workflow_thread.stage_complete.connect(
+            self._on_stage_complete,
+            Qt.ConnectionType.QueuedConnection
+        )
+        self._workflow_thread.log_message.connect(
+            self._on_log_message,
+            Qt.ConnectionType.QueuedConnection
+        )
+        self._workflow_thread.error_occurred.connect(
+            self._on_error_occurred,
+            Qt.ConnectionType.QueuedConnection
+        )
+        self._workflow_thread.finished.connect(
+            self._on_build_finished,
+            Qt.ConnectionType.QueuedConnection
+        )
+
+        # 启动线程
+        self._workflow_thread.start()
+
+        self.status_bar.showMessage("🚀 构建流程启动...")
+        logger.info("构建流程已启动")
+
+    def _lock_config_ui(self):
+        """锁定配置界面 - 构建期间禁用修改 (Story 2.4 Task 3.1)"""
+        self.project_combo.setEnabled(False)
+
+        # 禁用所有操作按钮
+        for btn in [self.validate_btn, self.build_btn]:
+            btn.setEnabled(False)
+
+        # 显示取消按钮 (Story 2.4 Task 6.1)
+        if hasattr(self, 'cancel_btn'):
+            self.cancel_btn.setVisible(True)
+            self.cancel_btn.setEnabled(True)
+
+        # 更新状态栏
+        self.status_bar.showMessage("🔒 构建进行中 - 配置已锁定")
+        logger.info("配置界面已锁定")
+
+    def _unlock_config_ui(self):
+        """解锁配置界面 - 构建完成后恢复 (Story 2.4 Task 3.2)"""
+        self.project_combo.setEnabled(True)
+
+        # 恢复按钮状态
+        self.validate_btn.setEnabled(bool(self._current_config))
+        self.build_btn.setEnabled(bool(self._current_config))
+
+        # 隐藏取消按钮
+        if hasattr(self, 'cancel_btn'):
+            self.cancel_btn.setVisible(False)
+
+        # 更新状态栏
+        self.status_bar.showMessage("✅ 构建完成 - 配置已解锁")
+        logger.info("配置界面已解锁")
+
+    def _cancel_build(self):
+        """取消构建 (Story 2.4 Task 6)"""
+        if hasattr(self, '_workflow_thread') and self._is_building:
+            reply = QMessageBox.question(
+                self,
+                "⚠️ 确认取消",
+                "确定要取消当前构建吗？\n\n正在执行的操作将被中断。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply == QMessageBox.StandardButton.Yes:
+                self.status_bar.showMessage("⏸️ 正在取消构建...")
+                self._workflow_thread.cancel()
+                logger.info("用户请求取消构建")
+
+    def _on_build_finished(self, success: bool):
+        """构建完成回调 (Story 2.4 Task 3.4)"""
+        self._is_building = False
+        self._unlock_config_ui()
+
+        if success:
             QMessageBox.information(
                 self,
-                "🚀 构建启动",
-                f"开始构建项目: {self._current_config.name}\n\n"
-                "构建流程将在后续 Epic 中实现。\n\n"
-                "包含以下步骤：\n"
-                "• MATLAB 代码生成\n"
-                "• IAR 工程编译\n"
-                "• A2L 文件处理\n"
-                "• 最终文件打包"
+                "✅ 构建成功",
+                f"项目 {self._current_config.name} 构建成功！"
             )
+            self.status_bar.showMessage("✅ 构建完成")
+        else:
+            # 检查是否是用户取消
+            if hasattr(self, '_workflow_thread') and self._workflow_thread.is_cancelled():
+                self.status_bar.showMessage("⏸️ 构建已取消")
+                QMessageBox.information(self, "⏸️ 已取消", "构建已被用户取消。")
+            else:
+                self.status_bar.showMessage("❌ 构建失败")
+                # 错误详情已在 error_occurred 中处理
+
+    def _on_progress_update(self, percent: int, message: str):
+        """进度更新回调 (Story 2.4 Task 4.2)"""
+        self.status_bar.showMessage(f"📊 {percent}% - {message}")
+
+    def _on_stage_complete(self, stage_name: str, success: bool):
+        """阶段完成回调 (Story 2.4 Task 4.3)"""
+        status = "✅" if success else "❌"
+        logger.info(f"{status} 阶段完成: {stage_name}")
+
+        # TODO: 更新UI中的阶段状态显示 (Story 3.1)
+
+    def _on_log_message(self, message: str):
+        """日志消息回调 (Story 2.4 Task 4.4)"""
+        # TODO: 显示在日志查看器中 (Story 3.2)
+        logger.info(message)
+
+    def _on_error_occurred(self, error: str, suggestions: list):
+        """错误发生回调 (Story 2.4 Task 5)"""
+        logger.error(f"构建错误: {error}")
+
+        # 构建错误消息
+        msg = error
+        if suggestions:
+            msg += "\n\n建议操作:\n" + "\n".join(f"  • {s}" for s in suggestions)
+
+        QMessageBox.critical(self, "❌ 构建失败", msg)
 
     def _show_about(self):
         """显示关于对话框"""
@@ -635,3 +804,89 @@ class MainWindow(QMainWindow):
             当前 ProjectConfig 对象，如果未加载则返回 None
         """
         return self._current_config
+
+
+class WorkflowThread(QThread):
+    """工作流执行线程 - 在后台执行构建流程 (Story 2.4 Task 1)
+
+    遵循 Architecture Decision 3.1 (PyQt6 线程 + 信号模式):
+    - 继承 QThread 在后台执行
+    - 使用 pyqtSignal 发射进度和状态
+    - 支持取消请求
+
+    Signals:
+        progress_update: (进度百分比, 消息)
+        stage_complete: (阶段名, 成功)
+        log_message: (日志内容)
+        error_occurred: (错误, 建议列表)
+        finished: (成功)
+    """
+
+    # 信号定义 (Story 2.4 Task 1.2) - 必须使用 pyqtSignal
+    progress_update = pyqtSignal(int, str)  # (进度百分比, 消息)
+    stage_complete = pyqtSignal(str, bool)   # (阶段名, 成功)
+    log_message = pyqtSignal(str)            # (日志内容)
+    error_occurred = pyqtSignal(str, list)   # (错误, 建议列表)
+    finished = pyqtSignal(bool)             # (成功)
+
+    def __init__(self, project_config: ProjectConfig, workflow_config: WorkflowConfig):
+        """初始化工作流线程
+
+        Args:
+            project_config: 项目配置
+            workflow_config: 工作流配置
+        """
+        super().__init__()
+        self.project_config = project_config
+        self.workflow_config = workflow_config
+        self._is_cancelled = False
+
+    def run(self):
+        """执行工作流 - 在后台线程中运行 (Story 2.4 Task 1.1)"""
+        try:
+            logger.info(f"开始执行工作流: {self.workflow_config.name}")
+
+            # 创建构建上下文 (Story 2.4 Task 1.3)
+            context = BuildContext()
+            context.config = self.project_config.to_dict()
+            context.log_callback = self._log
+
+            # 执行工作流 (Story 2.4 Task 2)
+            success = execute_workflow(
+                self.workflow_config,
+                context,
+                progress_callback=self._update_progress,
+                stage_callback=self._on_stage_complete,
+                cancel_check=lambda: self._is_cancelled
+            )
+
+            self.finished.emit(success)
+
+        except Exception as e:
+            logger.error(f"工作流执行异常: {e}", exc_info=True)
+            self.error_occurred.emit(str(e), ["查看日志获取详细信息"])
+
+    def cancel(self):
+        """请求取消工作流 (Story 2.4 Task 6.2)"""
+        self._is_cancelled = True
+        logger.info("收到取消请求")
+
+    def is_cancelled(self) -> bool:
+        """检查工作流是否被取消
+
+        Returns:
+            bool: 如果工作流被取消返回 True
+        """
+        return self._is_cancelled
+
+    def _log(self, message: str):
+        """日志回调 - 发射信号到UI (Story 2.4 Task 1.3)"""
+        self.log_message.emit(message)
+
+    def _update_progress(self, percent: int, message: str):
+        """进度更新回调 (Story 2.4 Task 1.2)"""
+        self.progress_update.emit(percent, message)
+
+    def _on_stage_complete(self, stage_name: str, success: bool):
+        """阶段完成回调 (Story 2.4 Task 1.2)"""
+        self.stage_complete.emit(stage_name, success)
