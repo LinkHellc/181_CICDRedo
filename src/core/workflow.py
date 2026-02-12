@@ -8,7 +8,7 @@ following Architecture Decision 1.1 (Stage Interface Pattern).
 import logging
 import time
 from pathlib import Path
-from typing import List, Dict, Set, Optional, Callable
+from typing import List, Dict, Set, Optional, Callable, TYPE_CHECKING
 
 from core.models import (
     WorkflowConfig,
@@ -21,17 +21,155 @@ from core.models import (
     StageStatus
 )
 
+# 类型注解导入（仅在类型检查时使用）
+if TYPE_CHECKING:
+    from core.models import StageConfig
+
 logger = logging.getLogger(__name__)
 
 # 默认超时值（秒）
 DEFAULT_TIMEOUT = 300
 
-# 阶段依赖规则（Story 2.3 Task 2.2）
+# 阶段执行器映射 (Story 2.5 - 任务 8, Story 2.7 - 任务 6, Story 2.8 - 任务 5)
+# 映射阶段名称到对应的执行函数
+STAGE_EXECUTORS: Dict[str, Callable] = {
+    # Story 2.5: MATLAB 代码生成阶段
+    "matlab_gen": lambda config, context: _execute_matlab_gen(config, context),
+    # Story 2.6: 文件处理阶段
+    "file_process": lambda config, context: _execute_file_process(config, context),
+    # Story 2.7: 文件移动阶段
+    "file_move": lambda config, context: _execute_file_move(config, context),
+    # Story 2.8: IAR 编译阶段
+    "iar_compile": lambda config, context: _execute_iar_compile(config, context),
+    # 后续 Story (2.9-2.12) 会逐步实现
+    # "a2l_process": stages.a2l_process.execute_stage,
+    # "package": stages.package.execute_stage,
+}
+
+
+def _execute_file_process(config, context) -> StageResult:
+    """执行文件处理阶段（内部包装函数）
+
+    Story 2.6 - 任务 8.1-8.3:
+    - 在 STAGE_EXECUTORS 中注册 file_process
+    - 指向 stages.file_process.execute_stage
+    - 确保阶段按工作流顺序执行
+
+    Args:
+        config: 阶段配置
+        context: 构建上下文
+
+    Returns:
+        StageResult: 阶段执行结果
+    """
+    try:
+        # 动态导入以避免循环依赖
+        from stages.file_process import execute_stage
+        return execute_stage(config, context)
+    except ImportError as e:
+        logger.error(f"无法导入 file_process 模块: {e}")
+        return StageResult(
+            status=StageStatus.FAILED,
+            message=f"文件处理模块未实现",
+            error=e,
+            suggestions=["确保 Story 2.6 已正确实现"]
+        )
+
+
+def _execute_file_move(config, context) -> StageResult:
+    """执行文件移动阶段（内部包装函数）
+
+    Story 2.7 - 任务 6.1-6.3:
+    - 在 STAGE_EXECUTORS 中注册 file_move
+    - 指向 stages.file_move.execute_stage
+    - 确保阶段按工作流顺序执行
+
+    Args:
+        config: 阶段配置
+        context: 构建上下文
+
+    Returns:
+        StageResult: 阶段执行结果
+    """
+    try:
+        # 动态导入以避免循环依赖
+        from stages.file_move import execute_stage
+        return execute_stage(config, context)
+    except ImportError as e:
+        logger.error(f"无法导入 file_move 模块: {e}")
+        return StageResult(
+            status=StageStatus.FAILED,
+            message=f"文件移动模块未实现",
+            error=e,
+            suggestions=["确保 Story 2.7 已正确实现"]
+        )
+
+
+def _execute_iar_compile(config, context) -> StageResult:
+    """执行 IAR 编译阶段（内部包装函数）
+
+    Story 2.8 - 任务 5.1-5.3:
+    - 在 STAGE_EXECUTORS 中注册 iar_compile
+    - 指向 stages.iar_compile.execute_stage
+    - 确保阶段按工作流顺序执行
+    - 将编译输出传递给下一阶段（A2L 处理）
+
+    Args:
+        config: 阶段配置
+        context: 构建上下文
+
+    Returns:
+        StageResult: 阶段执行结果
+    """
+    try:
+        # 动态导入以避免循环依赖
+        from stages.iar_compile import execute_stage
+        return execute_stage(config, context)
+    except ImportError as e:
+        logger.error(f"无法导入 iar_compile 模块: {e}")
+        return StageResult(
+            status=StageStatus.FAILED,
+            message=f"IAR 编译模块未实现",
+            error=e,
+            suggestions=["确保 Story 2.8 已正确实现"]
+        )
+
+
+def _execute_matlab_gen(config, context) -> StageResult:
+    """执行 MATLAB 代码生成阶段（内部包装函数）
+
+    Story 2.5 - 任务 8.1-8.3:
+    - 在 STAGE_EXECUTORS 中注册 matlab_gen
+    - 指向 stages.matlab_gen.execute_stage
+    - 确保阶段按工作流顺序执行
+
+    Args:
+        config: 阶段配置
+        context: 构建上下文
+
+    Returns:
+        StageResult: 阶段执行结果
+    """
+    try:
+        # 动态导入以避免循环依赖
+        from stages.matlab_gen import execute_stage
+        return execute_stage(config, context)
+    except ImportError as e:
+        logger.error(f"无法导入 matlab_gen 模块: {e}")
+        return StageResult(
+            status=StageStatus.FAILED,
+            message=f"MATLAB 代码生成模块未实现",
+            error=e,
+            suggestions=["确保 Story 2.5 已正确实现"]
+        )
+
+# 阶段依赖规则（Story 2.3 Task 2.2, Story 2.7 任务 6.3, Story 2.8 任务 5.3）
 STAGE_DEPENDENCIES = {
     "matlab_gen": [],           # 无依赖
     "file_process": ["matlab_gen"],  # 依赖 matlab_gen
-    "iar_compile": ["file_process"], # 依赖 file_process
-    "a2l_process": ["iar_compile"], # 依赖 iar_compile
+    "file_move": ["file_process"],  # 依赖 file_process (Story 2.7)
+    "iar_compile": ["file_move"],  # 依赖 file_move (Story 2.8)
+    "a2l_process": ["iar_compile"],  # 依赖 iar_compile
     "package": ["iar_compile", "a2l_process"]  # 依赖 iar_compile 和 a2l_process
 }
 
@@ -39,15 +177,17 @@ STAGE_DEPENDENCIES = {
 STAGE_ORDER = [
     "matlab_gen",
     "file_process",
+    "file_move",  # Story 2.7: 文件移动阶段
     "iar_compile",
     "a2l_process",
     "package"
 ]
 
-# 必需参数规则（Story 2.3 Task 3.2）
+# 必需参数规则（Story 2.3 Task 3.2, Story 2.7 任务 6.2）
 REQUIRED_PARAMS = {
     "matlab_gen": ["simulink_path", "matlab_code_path"],
     "file_process": ["matlab_code_path", "target_path"],
+    "file_move": ["matlab_code_path"],  # Story 2.7: 需要 matlab_code_path
     "iar_compile": ["iar_project_path", "matlab_code_path"],
     "a2l_process": ["a2l_path", "target_path"],
     "package": ["target_path"]
@@ -481,17 +621,19 @@ def execute_workflow(
 
         logger.info(f"开始执行阶段 {i+1}/{total_stages}: {stage_name}")
 
-        # TODO: 实际执行阶段 (当前为占位实现)
-        # 后续Story (2.5-2.12) 会实现具体阶段
-        # from stages.base import execute_stage
-        # result = execute_stage(stage_config, context, stage_impl=...)
-
-        # 占位: 模拟阶段执行成功
-        context.log(f"阶段 {stage_name} 执行中 (占位实现)...")
-        result = StageResult(
-            status=StageStatus.COMPLETED,
-            message=f"阶段 {stage_name} 执行成功 (占位实现)"
-        )
+        # 执行阶段 (Story 2.5 - 任务 8)
+        if stage_name in STAGE_EXECUTORS:
+            # 使用注册的阶段执行器
+            context.log(f"阶段 {stage_name} 执行中...")
+            executor = STAGE_EXECUTORS[stage_name]
+            result = executor(stage_config, context)
+        else:
+            # 占位实现 - 尚未实现的阶段
+            context.log(f"阶段 {stage_name} 尚未实现（占位实现）...")
+            result = StageResult(
+                status=StageStatus.COMPLETED,
+                message=f"阶段 {stage_name} 执行成功 (占位实现)"
+            )
 
         # 通知阶段完成
         if stage_callback:

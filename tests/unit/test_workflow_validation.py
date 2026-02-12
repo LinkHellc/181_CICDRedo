@@ -32,7 +32,7 @@ from core.workflow import (
 
 @pytest.fixture
 def valid_workflow_config():
-    """有效的完整工作流配置"""
+    """有效的完整工作流配置（Story 2.7: 包含 file_move 阶段）"""
     return WorkflowConfig(
         id="full_workflow",
         name="完整工作流",
@@ -41,6 +41,7 @@ def valid_workflow_config():
         stages=[
             StageConfig(name="matlab_gen", enabled=True, timeout=300),
             StageConfig(name="file_process", enabled=True, timeout=300),
+            StageConfig(name="file_move", enabled=True, timeout=300),  # Story 2.7
             StageConfig(name="iar_compile", enabled=True, timeout=600),
             StageConfig(name="a2l_process", enabled=True, timeout=300),
             StageConfig(name="package", enabled=True, timeout=300),
@@ -362,13 +363,14 @@ class TestUtilityFunctions:
     """测试工具函数"""
 
     def test_get_stage_dependency_info(self):
-        """测试获取阶段依赖信息"""
+        """测试获取阶段依赖信息（Story 2.7: iar_compile 现在依赖 file_move）"""
         info = get_stage_dependency_info("matlab_gen")
         assert info["dependencies"] == [], "matlab_gen 不应该有依赖"
         assert "无依赖" in info["description"], "描述应该说明无依赖"
 
         info = get_stage_dependency_info("iar_compile")
-        assert "file_process" in info["dependencies"], "iar_compile 应该依赖 file_process"
+        # Story 2.7: iar_compile 现在依赖 file_move 而不是 file_process
+        assert "file_move" in info["dependencies"], "iar_compile 应该依赖 file_move"
         assert "依赖" in info["description"], "描述应该说明有依赖"
 
     def test_get_required_params_info(self):

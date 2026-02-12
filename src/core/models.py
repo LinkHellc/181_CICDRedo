@@ -354,14 +354,19 @@ class BuildContext:
     - state: 可写阶段状态（用于传递）
     - log_callback: 统一日志接口
 
+    Story 2.5 - 任务 6.5:
+    - signal_emit: 信号发送回调（用于发送阶段完成时间和时长到 UI）
+
     Attributes:
         config: 全局配置字典（只读）
         state: 阶段间传递的状态字典（可写）
         log_callback: 日志回调函数
+        signal_emit: 信号发送回调函数（可选）
     """
     config: dict = dataclasses.field(default_factory=dict)
     state: dict = dataclasses.field(default_factory=dict)
     log_callback: Optional[callable] = None
+    signal_emit: Optional[callable] = None
 
     def get(self, key: str, default=None):
         """从状态中获取值
@@ -392,6 +397,20 @@ class BuildContext:
         """
         if self.log_callback:
             self.log_callback(message)
+
+    def emit_signal(self, signal_name: str, *args, **kwargs):
+        """发送信号到 UI
+
+        Story 2.5 - 任务 6.5:
+        - 通过信号发送阶段完成时间和时长到 UI
+
+        Args:
+            signal_name: 信号名称
+            *args: 信号位置参数
+            **kwargs: 信号关键字参数
+        """
+        if self.signal_emit:
+            self.signal_emit(signal_name, *args, **kwargs)
 
 
 @dataclass
