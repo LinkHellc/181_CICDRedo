@@ -56,10 +56,10 @@ development_status:
   2-2-load-custom-workflow-config: done
   2-3-validate-workflow-config-effectiveness: done
   2-4-start-automated-build-process: review
-  2-5-execute-matlab-code-generation-phase: backlog
-  2-6-extract-process-code-files: backlog
-  2-7-move-code-files-specified-directory: backlog
-  2-8-invoke-iar-command-line-compile: backlog
+  2-5-execute-matlab-code-generation-phase: done
+  2-6-extract-process-code-files: done
+  2-7-move-code-files-specified-directory: done
+  2-8-invoke-iar-command-line-compile: ready-for-dev
   2-9-update-a2l-file-variable-addresses: backlog
   2-10-replace-a2l-file-xcp-header-content: backlog
   2-11-create-timestamp-target-folder: backlog
