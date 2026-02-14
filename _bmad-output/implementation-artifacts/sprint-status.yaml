@@ -60,9 +60,9 @@ development_status:
   2-6-extract-process-code-files: done
   2-7-move-code-files-specified-directory: done
   2-8-invoke-iar-command-line-compile: done
-  2-9-update-a2l-file-variable-addresses: backlog
-  2-10-replace-a2l-file-xcp-header-content: backlog
-  2-11-create-timestamp-target-folder: backlog
+  2-9-update-a2l-file-variable-addresses: done
+  2-10-replace-a2l-file-xcp-header-content: done
+  2-11-create-timestamp-target-folder: done
   2-12-move-hex-a2l-files-target-folder: backlog
   2-13-detect-manage-matlab-process-state: backlog
   2-14-enable-disable-workflow-stages: backlog
