@@ -24,8 +24,9 @@ from PyQt6.QtGui import QAction, QFont, QIcon
 
 from core.config import list_saved_projects, load_config
 from utils.errors import ConfigLoadError
-from core.models import ProjectConfig, WorkflowConfig, BuildContext
+from core.models import ProjectConfig, WorkflowConfig, BuildContext, BuildState
 from core.workflow import validate_workflow_config, execute_workflow
+from core.workflow_manager import WorkflowManager
 from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.validation_result_dialog import show_validation_result
 from ui.styles.industrial_theme import apply_industrial_theme, BrandColors, FontManager
@@ -69,6 +70,9 @@ class MainWindow(QMainWindow):
 
         # 当前加载的配置
         self._current_config: ProjectConfig | None = None
+
+        # 初始化工作流管理器 (Story 2.4 Task 8.3)
+        self._workflow_manager = WorkflowManager(self)
 
         # 初始化 UI
         self._init_ui()
@@ -640,40 +644,31 @@ class MainWindow(QMainWindow):
         # 验证通过，开始构建流程
         self.build_btn.setEnabled(True)
 
-        # 锁定UI (Story 2.4 Task 3.1)
+        # 锁定UI (Story 2.4 Task 3.1, 4.1)
         self._lock_config_ui()
         self._is_building = True
 
-        # 创建工作流线程 (Story 2.4 Task 1)
-        self._workflow_thread = WorkflowThread(
+        # 使用工作流管理器启动构建 (Story 2.4 Task 8.4)
+        connections = {
+            'progress_update': self._on_progress_update,
+            'stage_started': self._on_stage_started,
+            'stage_complete': self._on_stage_complete,
+            'log_message': self._on_log_message,
+            'error_occurred': self._on_error_occurred,
+            'build_finished': self._on_build_finished
+        }
+
+        success = self._workflow_manager.start_workflow(
             self._current_config,
-            workflow_config
+            workflow_config,
+            connections
         )
 
-        # 连接信号 - 使用 QueuedConnection 确保线程安全 (Story 2.4 Task 4.1)
-        self._workflow_thread.progress_update.connect(
-            self._on_progress_update,
-            Qt.ConnectionType.QueuedConnection
-        )
-        self._workflow_thread.stage_complete.connect(
-            self._on_stage_complete,
-            Qt.ConnectionType.QueuedConnection
-        )
-        self._workflow_thread.log_message.connect(
-            self._on_log_message,
-            Qt.ConnectionType.QueuedConnection
-        )
-        self._workflow_thread.error_occurred.connect(
-            self._on_error_occurred,
-            Qt.ConnectionType.QueuedConnection
-        )
-        self._workflow_thread.finished.connect(
-            self._on_build_finished,
-            Qt.ConnectionType.QueuedConnection
-        )
-
-        # 启动线程
-        self._workflow_thread.start()
+        if not success:
+            self._is_building = False
+            self._unlock_config_ui()
+            QMessageBox.warning(self, "⚠️ 启动失败", "无法启动工作流线程。")
+            return
 
         self.status_bar.showMessage("🚀 构建流程启动...")
         logger.info("构建流程已启动")
@@ -712,8 +707,8 @@ class MainWindow(QMainWindow):
         logger.info("配置界面已解锁")
 
     def _cancel_build(self):
-        """取消构建 (Story 2.4 Task 6)"""
-        if hasattr(self, '_workflow_thread') and self._is_building:
+        """取消构建 (Story 2.4 Task 7.3)"""
+        if self._is_building and self._workflow_manager.is_running():
             reply = QMessageBox.question(
                 self,
                 "⚠️ 确认取消",
@@ -724,39 +719,53 @@ class MainWindow(QMainWindow):
 
             if reply == QMessageBox.StandardButton.Yes:
                 self.status_bar.showMessage("⏸️ 正在取消构建...")
-                self._workflow_thread.cancel()
+                self._workflow_manager.stop_workflow()
                 logger.info("用户请求取消构建")
 
-    def _on_build_finished(self, success: bool):
-        """构建完成回调 (Story 2.4 Task 3.4)"""
+    def _on_build_finished(self, state: BuildState):
+        """构建完成回调 (Story 2.4 Task 10.1)"""
         self._is_building = False
+
+        # 清理工作流管理器 (Story 2.4 Task 10.5)
+        self._workflow_manager.cleanup()
+
+        # 解锁UI (Story 2.4 Task 10.2)
         self._unlock_config_ui()
 
-        if success:
+        # 根据最终状态显示结果 (Story 2.4 Task 10.4)
+        if state == BuildState.COMPLETED:
             QMessageBox.information(
                 self,
                 "✅ 构建成功",
                 f"项目 {self._current_config.name} 构建成功！"
             )
             self.status_bar.showMessage("✅ 构建完成")
-        else:
-            # 检查是否是用户取消
-            if hasattr(self, '_workflow_thread') and self._workflow_thread.is_cancelled():
-                self.status_bar.showMessage("⏸️ 构建已取消")
-                QMessageBox.information(self, "⏸️ 已取消", "构建已被用户取消。")
-            else:
-                self.status_bar.showMessage("❌ 构建失败")
-                # 错误详情已在 error_occurred 中处理
+            self.last_build_label.setText("成功")
+        elif state == BuildState.CANCELLED:
+            self.status_bar.showMessage("⏸️ 构建已取消")
+            QMessageBox.information(self, "⏸️ 已取消", "构建已被用户取消。")
+            self.last_build_label.setText("已取消")
+        elif state == BuildState.FAILED:
+            self.status_bar.showMessage("❌ 构建失败")
+            self.last_build_label.setText("失败")
+            # 错误详情已在 error_occurred 中处理
+
+        # 记录最终状态到日志 (Story 2.4 Task 10.5)
+        logger.info(f"构建完成，状态: {state.value}")
 
     def _on_progress_update(self, percent: int, message: str):
-        """进度更新回调 (Story 2.4 Task 4.2)"""
+        """进度更新回调 (Story 2.4 Task 5.3)"""
         self.status_bar.showMessage(f"📊 {percent}% - {message}")
 
+    def _on_stage_started(self, stage_name: str):
+        """阶段开始回调 (Story 2.4 Task 5.4)"""
+        logger.info(f"🔄 阶段开始: {stage_name}")
+        # TODO: 更新UI中的阶段状态显示 (Story 3.1)
+
     def _on_stage_complete(self, stage_name: str, success: bool):
-        """阶段完成回调 (Story 2.4 Task 4.3)"""
+        """阶段完成回调 (Story 2.4 Task 5.4)"""
         status = "✅" if success else "❌"
         logger.info(f"{status} 阶段完成: {stage_name}")
-
         # TODO: 更新UI中的阶段状态显示 (Story 3.1)
 
     def _on_log_message(self, message: str):
@@ -805,88 +814,3 @@ class MainWindow(QMainWindow):
         """
         return self._current_config
 
-
-class WorkflowThread(QThread):
-    """工作流执行线程 - 在后台执行构建流程 (Story 2.4 Task 1)
-
-    遵循 Architecture Decision 3.1 (PyQt6 线程 + 信号模式):
-    - 继承 QThread 在后台执行
-    - 使用 pyqtSignal 发射进度和状态
-    - 支持取消请求
-
-    Signals:
-        progress_update: (进度百分比, 消息)
-        stage_complete: (阶段名, 成功)
-        log_message: (日志内容)
-        error_occurred: (错误, 建议列表)
-        finished: (成功)
-    """
-
-    # 信号定义 (Story 2.4 Task 1.2) - 必须使用 pyqtSignal
-    progress_update = pyqtSignal(int, str)  # (进度百分比, 消息)
-    stage_complete = pyqtSignal(str, bool)   # (阶段名, 成功)
-    log_message = pyqtSignal(str)            # (日志内容)
-    error_occurred = pyqtSignal(str, list)   # (错误, 建议列表)
-    finished = pyqtSignal(bool)             # (成功)
-
-    def __init__(self, project_config: ProjectConfig, workflow_config: WorkflowConfig):
-        """初始化工作流线程
-
-        Args:
-            project_config: 项目配置
-            workflow_config: 工作流配置
-        """
-        super().__init__()
-        self.project_config = project_config
-        self.workflow_config = workflow_config
-        self._is_cancelled = False
-
-    def run(self):
-        """执行工作流 - 在后台线程中运行 (Story 2.4 Task 1.1)"""
-        try:
-            logger.info(f"开始执行工作流: {self.workflow_config.name}")
-
-            # 创建构建上下文 (Story 2.4 Task 1.3)
-            context = BuildContext()
-            context.config = self.project_config.to_dict()
-            context.log_callback = self._log
-
-            # 执行工作流 (Story 2.4 Task 2)
-            success = execute_workflow(
-                self.workflow_config,
-                context,
-                progress_callback=self._update_progress,
-                stage_callback=self._on_stage_complete,
-                cancel_check=lambda: self._is_cancelled
-            )
-
-            self.finished.emit(success)
-
-        except Exception as e:
-            logger.error(f"工作流执行异常: {e}", exc_info=True)
-            self.error_occurred.emit(str(e), ["查看日志获取详细信息"])
-
-    def cancel(self):
-        """请求取消工作流 (Story 2.4 Task 6.2)"""
-        self._is_cancelled = True
-        logger.info("收到取消请求")
-
-    def is_cancelled(self) -> bool:
-        """检查工作流是否被取消
-
-        Returns:
-            bool: 如果工作流被取消返回 True
-        """
-        return self._is_cancelled
-
-    def _log(self, message: str):
-        """日志回调 - 发射信号到UI (Story 2.4 Task 1.3)"""
-        self.log_message.emit(message)
-
-    def _update_progress(self, percent: int, message: str):
-        """进度更新回调 (Story 2.4 Task 1.2)"""
-        self.progress_update.emit(percent, message)
-
-    def _on_stage_complete(self, stage_name: str, success: bool):
-        """阶段完成回调 (Story 2.4 Task 1.2)"""
-        self.stage_complete.emit(stage_name, success)

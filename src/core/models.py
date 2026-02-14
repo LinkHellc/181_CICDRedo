@@ -282,6 +282,25 @@ class StageStatus(Enum):
     CANCELLED = "cancelled"
 
 
+class BuildState(Enum):
+    """构建状态 (Story 2.4 Task 1.2)
+
+    用于表示整个构建流程的执行状态。
+
+    Attributes:
+        IDLE: 空闲
+        RUNNING: 运行中
+        COMPLETED: 已完成
+        FAILED: 失败
+        CANCELLED: 已取消
+    """
+    IDLE = "idle"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 @dataclass
 class StageResult:
     """阶段执行结果
@@ -367,6 +386,68 @@ class BuildContext:
     state: dict = dataclasses.field(default_factory=dict)
     log_callback: Optional[callable] = None
     signal_emit: Optional[callable] = None
+
+
+@dataclass
+class StageExecution:
+    """阶段执行信息 (Story 2.4 Task 1.3)
+
+    表示单个阶段的执行信息。
+
+    Architecture Decision 1.2:
+    - 所有字段提供默认值
+    - 使用 field(default_factory=...) 避免可变默认值陷阱
+
+    Attributes:
+        name: 阶段名称
+        status: 执行状态
+        start_time: 开始时间（time.monotonic）
+        end_time: 结束时间
+        duration: 执行时长（秒）
+        error_message: 错误消息
+        output_files: 输出文件列表
+    """
+    name: str = ""
+    status: BuildState = BuildState.IDLE
+    start_time: float = 0.0
+    end_time: float = 0.0
+    duration: float = 0.0
+    error_message: str = ""
+    output_files: List[str] = dataclasses.field(default_factory=list)
+
+
+@dataclass
+class BuildExecution:
+    """构建执行信息 (Story 2.4 Task 1.1)
+
+    表示整个构建流程的执行信息。
+
+    Architecture Decision 1.2:
+    - 所有字段提供默认值
+    - 使用 field(default_factory=...) 避免可变默认值陷阱
+
+    Attributes:
+        project_name: 项目名称
+        workflow_id: 工作流 ID
+        state: 构建状态
+        start_time: 开始时间（time.monotonic）
+        end_time: 结束时间
+        duration: 总执行时长（秒）
+        current_stage: 当前阶段名称
+        progress_percent: 进度百分比（0-100）
+        stages: 阶段执行列表
+        error_message: 错误消息
+    """
+    project_name: str = ""
+    workflow_id: str = ""
+    state: BuildState = BuildState.IDLE
+    start_time: float = 0.0
+    end_time: float = 0.0
+    duration: float = 0.0
+    current_stage: str = ""
+    progress_percent: int = 0
+    stages: List[StageExecution] = dataclasses.field(default_factory=list)
+    error_message: str = ""
 
     def get(self, key: str, default=None):
         """从状态中获取值
