@@ -148,6 +148,14 @@ class WorkflowManager(QObject):
             self.workflow_thread.isRunning()
         )
 
+    def get_current_worker(self) -> Optional[WorkflowThread]:
+        """获取当前工作流线程 (Story 2.14 - 任务 8.3)
+
+        Returns:
+            WorkflowThread: 当前工作流线程，如果没有则返回 None
+        """
+        return self.workflow_thread
+
     def get_current_execution(self) -> Optional[BuildExecution]:
         """获取当前构建执行信息 (Story 2.4 Task 8.2)
 

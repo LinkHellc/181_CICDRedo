@@ -779,3 +779,112 @@ class WorkflowConfigError(Exception):
 - [Source: _bmad-output/planning-artifacts/architecture.md#ADR-004](../planning-artifacts/architecture.md)
 - [Source: _bmad-output/implementation-artifacts/stories/2-4-start-automated-build-process.md](../implementation-artifacts/stories/2-4-start-automated-build-process.md)
 - [Source: _bmad-output/implementation-artifacts/stories/2-11-create-timestamp-target-folder.md](../implementation-artifacts/stories/2-11-create-timestamp-target-folder.md)
+
+---
+
+## Dev Agent Record
+
+### 实现进度
+
+**已完成任务** (2026-02-14):
+
+#### 任务 1: 扩展 StageConfig 数据模型支持启用/禁用 ✅
+- **1.1-1.3**: StageConfig 已有 `enabled: bool = True` 字段
+- **1.4**: `configs/default_workflow.json` 已包含 `enabled` 字段
+- **1.5-1.7**: 添加 13 个单元测试，全部通过
+- **文件**: `src/core/models.py` (已有字段), `configs/default_workflow.json` (已有字段)
+
+#### 任务 2: 定义阶段依赖关系 ✅
+- **2.1**: 在 `src/core/workflow.py` 中添加 `CORE_STAGE_DEPENDENCIES` 映射
+- **2.2**: 定义 5 个核心阶段的依赖关系
+- **2.3**: 实现 `get_stage_dependencies(stage_name)` 函数
+- **2.4**: 实现 `get_dependent_stages(stage_name)` 函数
+- **2.5-2.7**: 添加 25 个单元测试，全部通过
+- **文件**: `src/core/workflow.py`
+
+#### 任务 3: 实现阶段启用/禁用自动调整逻辑 ✅
+- **3.1**: 在 `src/core/workflow.py` 中实现 `adjust_stage_dependencies()` 函数
+- **3.2-3.4**: 实现禁用阶段时自动禁用后续阶段，启用阶段时自动启用前置阶段
+- **3.5-3.8**: 添加 10 个单元测试，全部通过
+- **文件**: `src/core/workflow.py`
+
+#### 任务 4: 创建工作流配置验证函数 ✅
+- **4.1**: 在 `src/core/config.py` 中实现 `validate_workflow_config()` 函数
+- **4.2**: 验证每个阶段的 `enabled` 字段为布尔值
+- **4.3**: 验证依赖关系的完整性
+- **4.4**: 返回验证错误列表
+- **4.5-4.7**: 添加 15 个单元测试，全部通过
+- **文件**: `src/core/config.py`
+
+#### 任务 5: 实现工作流配置加载时启用/禁用状态读取 ✅
+- **5.1**: 在 `src/core/config.py` 中实现 `load_workflow_config()` 函数
+- **5.2**: 读取 JSON 工作流配置文件
+- **5.3**: 解析每个阶段的 `enabled` 字段
+- **5.4**: 创建 `StageConfig` 对象列表
+- **5.5**: 如果配置文件中缺少 `enabled` 字段，使用默认值 True
+- **5.6**: 调用 `validate_workflow_config()` 验证配置
+- **5.7-5.9**: 添加 8 个单元测试，全部通过
+- **文件**: `src/core/config.py`
+
+### 技术决策
+
+1. **依赖关系设计**:
+   - 创建 `CORE_STAGE_DEPENDENCIES` 映射，专门用于5个核心阶段的依赖关系
+   - 与现有的 `STAGE_DEPENDENCIES`（包含file_move）分离，保持向后兼容
+
+2. **递归依赖处理**:
+   - `get_stage_dependencies()` 递归获取所有前置依赖（包括间接依赖）
+   - 先递归获取间接依赖，再添加直接依赖，确保顺序正确
+
+3. **自动调整逻辑**:
+   - `adjust_stage_dependencies()` 递归处理依赖关系
+   - 禁用阶段时自动禁用所有后置依赖
+   - 启用阶段时自动启用所有前置依赖
+
+4. **验证策略**:
+   - 验证 `enabled` 字段类型为布尔值
+   - 验证启用阶段的依赖是否也被启用
+   - 加载配置时调用验证，提前发现错误
+
+### 测试结果
+
+**总计**: 71 个单元测试，100% 通过
+
+- `test_workflow_stages.py`: 48 个测试 ✅
+  - TestStageConfigEnabledField: 13 个测试
+  - TestStageDependencies: 6 个测试
+  - TestGetStageDependencies: 7 个测试
+  - TestGetDependentStages: 7 个测试
+  - TestAdjustStageDependencies: 10 个测试
+
+- `test_workflow_config.py`: 23 个测试 ✅
+  - TestValidateWorkflowConfig: 15 个测试
+  - TestLoadWorkflowConfig: 8 个测试
+
+### 待完成任务
+
+- [ ] 任务 6: 实现工作流配置保存时启用/禁用状态写入
+- [ ] 任务 7: 修改工作流执行引擎支持跳过禁用阶段
+- [ ] 任务 8: 添加 UI 组件显示和调整阶段启用/禁用状态
+- [ ] 任务 9: 实现错误处理和可操作建议
+- [ ] 任务 10: 添加集成测试
+- [ ] 任务 11: 添加日志记录
+
+---
+
+## File List
+
+### 新建文件
+
+- `tests/unit/test_workflow_stages.py` - 工作流阶段单元测试（48 个测试）
+- `tests/unit/test_workflow_config.py` - 工作流配置单元测试（23 个测试）
+
+### 修改文件
+
+- `src/core/workflow.py` - 添加 CORE_STAGE_DEPENDENCIES, get_stage_dependencies(), get_dependent_stages(), adjust_stage_dependencies()
+- `src/core/config.py` - 添加 validate_workflow_config(), load_workflow_config()
+
+### 已有文件（无需修改）
+
+- `src/core/models.py` - StageConfig 已包含 enabled 字段
+- `configs/default_workflow.json` - 已包含 enabled 字段

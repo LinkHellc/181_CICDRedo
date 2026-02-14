@@ -698,3 +698,102 @@ def validate_workflow_config(stages: list) -> list[str]:
                 logger.warning(f"阶段 '{stage_name}' 依赖未知的阶段 '{dep_name}'")
 
     return errors
+
+
+def load_workflow_config(filepath: Path) -> tuple[list, list[str]]:
+    """加载工作流配置文件 (Story 2.14 - 任务 5)
+
+    从 JSON 文件加载工作流配置，读取每个阶段的 enabled 字段。
+
+    Args:
+        filepath: 工作流配置文件路径
+
+    Returns:
+        (stages, errors):
+            - stages: 阶段配置列表（StageConfig 对象列表）
+            - errors: 错误消息列表（空列表表示成功）
+
+    Examples:
+        >>> # 加载完整的工作流配置
+        >>> stages, errors = load_workflow_config(Path("workflow.json"))
+        >>> if errors:
+        ...     print("加载失败:", errors)
+    """
+    errors = []
+
+    try:
+        # 检查文件是否存在 (任务 5.2)
+        if not filepath.exists():
+            errors.append(f"文件不存在: {filepath}")
+            return [], errors
+
+        # 加载 JSON 文件
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            errors.append(f"JSON 格式错误: {e}")
+            return [], errors
+        except UnicodeDecodeError:
+            errors.append("文件编码错误，请使用 UTF-8 编码保存")
+            return [], errors
+
+        # 验证基本结构
+        if "workflow_name" not in data and "name" not in data:
+            errors.append("工作流配置缺少 'workflow_name' 或 'name' 字段")
+            return [], errors
+
+        if "stages" not in data:
+            errors.append("工作流配置缺少 'stages' 字段")
+            return [], errors
+
+        if not isinstance(data["stages"], list):
+            errors.append("'stages' 字段必须是一个列表")
+            return [], errors
+
+        # 解析阶段列表 (任务 5.3, 5.4)
+        stages = []
+        for i, stage_data in enumerate(data["stages"]):
+            if not isinstance(stage_data, dict):
+                errors.append(f"阶段 {i} 必须是字典类型")
+                continue
+
+            # 验证必填字段
+            if "name" not in stage_data:
+                errors.append(f"阶段 {i} 缺少 'name' 字段")
+                continue
+
+            stage_name = stage_data["name"]
+
+            # 解析 enabled 字段，使用默认值 True (任务 5.5)
+            enabled = stage_data.get("enabled", True)
+            if not isinstance(enabled, bool):
+                errors.append(f"阶段 '{stage_name}' 的 enabled 字段必须是布尔值，当前为 {type(enabled).__name__}")
+                # 使用默认值继续
+                enabled = True
+
+            # 解析其他字段
+            timeout = stage_data.get("timeout", 300)
+
+            # 创建 StageConfig 对象 (任务 5.4)
+            stage = StageConfig(
+                name=stage_name,
+                enabled=enabled,
+                timeout=timeout
+            )
+            stages.append(stage)
+
+        # 验证配置 (任务 5.6)
+        validation_errors = validate_workflow_config(stages)
+        if validation_errors:
+            errors.extend(validation_errors)
+            return stages, errors
+
+        logger.info(f"成功加载工作流配置: {filepath}, 包含 {len(stages)} 个阶段")
+        return stages, errors
+
+    except Exception as e:
+        error_msg = f"加载工作流配置时发生未知错误: {e}"
+        logger.exception(error_msg)
+        errors.append(error_msg)
+        return [], errors

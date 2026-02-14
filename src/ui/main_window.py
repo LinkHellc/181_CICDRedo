@@ -32,6 +32,7 @@ from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.validation_result_dialog import show_validation_result
 from ui.styles.industrial_theme import apply_industrial_theme, BrandColors, FontManager
 from ui.widgets.log_viewer import LogViewer
+from ui.widgets.progress_panel import ProgressPanel  # Story 2.14 - 任务 5, 8
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,9 @@ class MainWindow(QMainWindow):
 
         # ===== 状态概览卡片 =====
         layout.addWidget(self._create_status_card())
+
+        # ===== 构建进度卡片 (Story 2.14 - 任务 5, 8) =====
+        layout.addWidget(self._create_progress_card())
 
         # ===== 日志查看器卡片 =====
         layout.addWidget(self._create_log_viewer_card())
@@ -353,6 +357,40 @@ class MainWindow(QMainWindow):
         stats_row.addWidget(self.project_count_label)
         stats_row.addStretch()
         layout.addLayout(stats_row)
+
+        return card
+
+    def _create_progress_card(self) -> QFrame:
+        """创建进度面板卡片 (Story 2.14 - 任务 5, 8)"""
+        card = QFrame()
+        card.setProperty("elevated", True)
+
+        layout = QVBoxLayout(card)
+        layout.setSpacing(16)
+        layout.setContentsMargins(28, 24, 28, 24)
+
+        # 卡片标题和操作按钮
+        header_row = QHBoxLayout()
+
+        title = QLabel("📊 构建进度")
+        title.setProperty("subheading", True)
+        header_row.addWidget(title)
+
+        header_row.addStretch()
+
+        # 清空进度按钮
+        clear_btn = QPushButton("🗑️ 清空")
+        clear_btn.setProperty("icon-btn", True)
+        clear_btn.setToolTip("清空进度")
+        clear_btn.clicked.connect(self._clear_progress_panel)
+        header_row.addWidget(clear_btn)
+
+        layout.addLayout(header_row)
+
+        # 进度面板 (Story 2.14 - 任务 5)
+        self.progress_panel = ProgressPanel()
+        self.progress_panel.setMinimumHeight(250)
+        layout.addWidget(self.progress_panel)
 
         return card
 
@@ -687,9 +725,14 @@ class MainWindow(QMainWindow):
         self._lock_config_ui()
         self._is_building = True
 
+        # 清空进度面板
+        if hasattr(self, 'progress_panel'):
+            self.progress_panel.clear()
+
         # 使用工作流管理器启动构建 (Story 2.4 Task 8.4)
         connections = {
             'progress_update': self._on_progress_update,
+            'progress_update_detailed': self._on_progress_update_detailed,  # Story 2.14 - 任务 8.2
             'stage_started': self._on_stage_started,
             'stage_complete': self._on_stage_complete,
             'log_message': self._on_log_message,
@@ -708,6 +751,15 @@ class MainWindow(QMainWindow):
             self._unlock_config_ui()
             QMessageBox.warning(self, "⚠️ 启动失败", "无法启动工作流线程。")
             return
+
+        # Story 2.14 - 任务 8.3: 连接 progress_update_detailed 信号（使用 QueuedConnection）
+        worker = self._workflow_manager.get_current_worker()
+        if worker and hasattr(worker, 'progress_update_detailed'):
+            worker.progress_update_detailed.connect(
+                self.progress_panel.update_progress,
+                Qt.ConnectionType.QueuedConnection  # ⚠️ 重要：跨线程必须使用 QueuedConnection
+            )
+            logger.info("已连接 progress_update_detailed 信号到进度面板")
 
         self.status_bar.showMessage("🚀 构建流程启动...")
         logger.info("构建流程已启动")
@@ -796,6 +848,17 @@ class MainWindow(QMainWindow):
         """进度更新回调 (Story 2.4 Task 5.3)"""
         self.status_bar.showMessage(f"📊 {percent}% - {message}")
 
+    def _on_progress_update_detailed(self, progress):
+        """详细进度更新回调 (Story 2.14 - 任务 8.2)
+
+        接收 BuildProgress 对象并更新进度面板。
+
+        Args:
+            progress: BuildProgress 对象
+        """
+        # 这个方法主要用于日志记录，实际的UI更新通过信号直接连接完成
+        logger.debug(f"进度更新: {progress.current_stage} ({progress.percentage:.1f}%)")
+
     def _on_stage_started(self, stage_name: str):
         """阶段开始回调 (Story 2.4 Task 5.4)"""
         logger.info(f"🔄 阶段开始: {stage_name}")
@@ -819,6 +882,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'log_viewer'):
             self.log_viewer.clear_log()
             logger.info("日志查看器已清空")
+
+    def _clear_progress_panel(self):
+        """清空进度面板 (Story 2.14 - 任务 8.5)"""
+        if hasattr(self, 'progress_panel'):
+            self.progress_panel.clear()
+            logger.info("进度面板已清空")
 
     def _on_error_occurred(self, error: str, suggestions: list):
         """错误发生回调 (Story 2.4 Task 5)"""

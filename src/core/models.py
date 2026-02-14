@@ -282,12 +282,14 @@ class StageStatus(Enum):
         COMPLETED: 已完成
         FAILED: 失败
         CANCELLED: 已取消
+        SKIPPED: 跳过 (Story 2.14 - 任务 2.2)
     """
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    SKIPPED = "skipped"  # Story 2.14 - 任务 2.2
 
 
 class BuildState(Enum):
@@ -667,6 +669,79 @@ class BuildExecution:
         """
         if self.signal_emit:
             self.signal_emit(signal_name, *args, **kwargs)
+
+
+@dataclass
+class BuildProgress:
+    """构建进度数据模型 (Story 2.14 - 任务 1)
+
+    表示构建流程的实时进度信息。
+
+    Architecture Decision 1.2:
+    - 所有字段提供默认值
+    - 使用 field(default_factory=...) 避免可变默认值陷阱
+    - 使用 typing.Dict, typing.List, typing.Optional (Python 3.11 兼容性)
+
+    Attributes:
+        current_stage: 当前执行的阶段名称
+        total_stages: 总阶段数
+        completed_stages: 已完成的阶段数
+        percentage: 进度百分比（0-100）
+        stage_statuses: 各阶段的状态字典（key: 阶段名, value: StageStatus）
+        stage_errors: 各阶段的错误消息字典（key: 阶段名, value: 错误消息）
+        start_time: 开始时间（使用 time.monotonic()）
+        elapsed_time: 已用时间（秒）
+        estimated_remaining_time: 预计剩余时间（秒）
+    """
+    current_stage: str = ""
+    total_stages: int = 0
+    completed_stages: int = 0
+    percentage: float = 0.0
+    stage_statuses: Dict[str, StageStatus] = dataclasses.field(default_factory=dict)
+    stage_errors: Dict[str, str] = dataclasses.field(default_factory=dict)
+    start_time: float = 0.0
+    elapsed_time: float = 0.0
+    estimated_remaining_time: float = 0.0
+
+    def to_dict(self) -> dict:
+        """转换为字典
+
+        Returns:
+            构建进度字典
+        """
+        return {
+            "current_stage": self.current_stage,
+            "total_stages": self.total_stages,
+            "completed_stages": self.completed_stages,
+            "percentage": self.percentage,
+            "stage_statuses": {k: v.value for k, v in self.stage_statuses.items()},
+            "stage_errors": self.stage_errors,
+            "start_time": self.start_time,
+            "elapsed_time": self.elapsed_time,
+            "estimated_remaining_time": self.estimated_remaining_time
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BuildProgress":
+        """从字典创建构建进度对象
+
+        Args:
+            data: 构建进度字典
+
+        Returns:
+            BuildProgress 实例
+        """
+        valid_fields = {f.name for f in fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+
+        # 处理嵌套的 stage_statuses（字符串到枚举的转换）
+        if "stage_statuses" in filtered_data and isinstance(filtered_data["stage_statuses"], dict):
+            filtered_data["stage_statuses"] = {
+                k: StageStatus(v) if isinstance(v, str) else v
+                for k, v in filtered_data["stage_statuses"].items()
+            }
+
+        return cls(**filtered_data)
 
 
 @dataclass
