@@ -753,3 +753,269 @@ def create_target_folder_safe(
                 "联系技术支持"
             ]
         )
+
+
+# =============================================================================
+# Story 2.12: 移动 HEX 和 A2L 文件到目标文件夹
+# =============================================================================
+
+def locate_output_files(source_path: Path, file_type: str = "hex") -> List[Path]:
+    """定位输出文件
+
+    Story 2.12 - 任务 1.1-1.5:
+    - 接受源路径和文件类型参数（HEX/A2L）
+    - 使用 pathlib.Path.glob() 查找匹配的文件（支持通配符）
+    - 返回找到的文件路径列表
+
+    Args:
+        source_path: 源路径
+        file_type: 文件类型（hex 或 a2l，默认 hex）
+
+    Returns:
+        List[Path]: 找到的文件路径列表
+
+    Raises:
+        ValueError: 不支持的文件类型
+
+    Examples:
+        >>> from pathlib import Path
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     base = Path(tmpdir)
+        ...     (base / "test.hex").touch()
+        ...     files = locate_output_files(base, "hex")
+        ...     assert len(files) == 1
+        ...     assert files[0].name == "test.hex"
+    """
+    if file_type.lower() == "hex":
+        pattern = "*.hex"
+    elif file_type.lower() == "a2l":
+        pattern = "*.a2l"
+    else:
+        raise ValueError(f"不支持的文件类型: {file_type}")
+
+    files = list(source_path.glob(pattern))
+    logger.debug(f"定位 {file_type.upper()} 文件: 找到 {len(files)} 个文件")
+    return files
+
+
+def rename_output_file(source_file: Path, target_folder: Path, timestamp: str) -> Path:
+    """重命名输出文件
+
+    Story 2.12 - 任务 2.1-2.5:
+    - 接受源文件路径、目标文件夹路径、时间戳参数
+    - 按命名规范生成新文件名：
+      - A2L: tmsAPP_upAdress[_时间戳].a2l
+      - HEX: VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB[_时间戳：_YYYYMMDD_V99_HH_MM].hex
+    - 返回目标文件路径
+
+    Args:
+        source_file: 源文件路径
+        target_folder: 目标文件夹
+        timestamp: 时间戳（格式：_YYYY_MM_DD_HH_MM）
+
+    Returns:
+        Path: 目标文件路径
+
+    Examples:
+        >>> from pathlib import Path
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     base = Path(tmpdir)
+        ...     target = base / "output"
+        ...     target.mkdir()
+        ...     source = base / "test.a2l"
+        ...     source.touch()
+        ...     result = rename_output_file(source, target, "_2026_02_14_16_35")
+        ...     assert "2026_02_14_16_35" in result.name
+    """
+    # 获取文件扩展名
+    ext = source_file.suffix.lower()
+
+    # 根据文件类型生成新文件名
+    if ext == ".a2l":
+        # A2L 文件命名: tmsAPP_upAdress[_时间戳].a2l
+        new_name = f"tmsAPP_upAdress{timestamp}{ext}"
+    elif ext == ".hex":
+        # HEX 文件命名: VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB[_时间戳：_YYYYMMDD_V99_HH_MM].hex
+        # 转换时间戳格式: _YYYY_MM_DD_HH_MM -> _YYYYMMDD_V99_HH_MM
+        parts = timestamp.split("_")
+        if len(parts) >= 6:
+            hex_timestamp = f"_{parts[1]}{parts[2]}{parts[3]}_V99_{parts[4]}_{parts[5]}"
+        else:
+            hex_timestamp = timestamp
+        new_name = f"VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB{hex_timestamp}{ext}"
+
+        # 处理文件名冲突：如果目标文件已存在，添加源文件名作为后缀
+        target_file = target_folder / new_name
+        if target_file.exists():
+            # 使用源文件名（不含扩展名）作为后缀
+            stem = source_file.stem
+            # 插入源文件名到时间戳之前
+            if hex_timestamp:
+                new_name = f"VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB_{stem}{hex_timestamp}{ext}"
+            else:
+                new_name = f"VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB_{stem}{ext}"
+    else:
+        new_name = source_file.name
+
+    target_file = target_folder / new_name
+    return target_file
+
+
+def move_output_file(source_file: Path, target_folder: Path, timestamp: str) -> Path:
+    """移动输出文件
+
+    Story 2.12 - 任务 3.1-3.6:
+    - 接受源文件路径、目标文件夹路径、新文件名参数
+    - 使用 pathlib.Path.rename() 移动文件（跨卷使用 shutil.move）
+    - 验证移动后的文件存在
+    - 验证移动后的文件大小正确
+    - 返回目标文件路径
+
+    Args:
+        source_file: 源文件路径
+        target_folder: 目标文件夹
+        timestamp: 时间戳
+
+    Returns:
+        Path: 目标文件路径
+
+    Raises:
+        FileNotFoundError: 源文件不存在
+        FileMoveError: 文件移动失败
+
+    Examples:
+        >>> from pathlib import Path
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     base = Path(tmpdir)
+        ...     target = base / "output"
+        ...     target.mkdir()
+        ...     source = base / "test.hex"
+        ...     source.write_text("test content")
+        ...     result = move_output_file(source, target, "_2026_02_14_16_35")
+        ...     assert result.exists()
+        ...     assert not source.exists()
+    """
+    if not source_file.exists():
+        logger.error(f"源文件不存在: {source_file}")
+        raise FileNotFoundError(f"源文件不存在: {source_file}")
+
+    # 记录原始文件大小
+    original_size = source_file.stat().st_size
+
+    # 生成目标文件路径
+    target_file = rename_output_file(source_file, target_folder, timestamp)
+
+    logger.debug(f"移动文件: {source_file} -> {target_file}")
+
+    try:
+        # 移动文件（跨卷使用 shutil.move）
+        shutil.move(str(source_file), str(target_file))
+    except Exception as e:
+        logger.error(f"文件移动失败: {source_file} -> {target_file} - {e}")
+        from utils.errors import FileMoveError
+        raise FileMoveError(
+            f"文件移动失败: {source_file} -> {target_file}",
+            suggestions=[
+                "检查目标文件夹权限",
+                "检查磁盘空间",
+                "检查文件是否被占用"
+            ]
+        ) from e
+
+    # 验证移动成功 (Story 2.12 - 任务 3.4, 3.5)
+    if not target_file.exists():
+        from utils.errors import FileMoveError
+        raise FileMoveError(
+            f"文件移动后验证失败: {target_file}",
+            suggestions=["查看详细日志", "联系技术支持"]
+        )
+
+    # 验证文件大小正确
+    new_size = target_file.stat().st_size
+    if new_size != original_size:
+        from utils.errors import FileMoveError
+        raise FileMoveError(
+            f"文件移动后大小不一致: 原始 {original_size} 字节，新 {new_size} 字节",
+            suggestions=["检查磁盘空间", "检查文件系统错误"]
+        )
+
+    logger.debug(f"文件移动成功: {target_file}")
+    return target_file
+
+
+def move_output_files_safe(
+    source_path_hex: Path,
+    source_path_a2l: Path,
+    target_folder: Path,
+    timestamp: str
+) -> tuple:
+    """安全移动所有输出文件
+
+    Story 2.12 - 任务 4.1-4.7:
+    - 接受源路径、目标文件夹路径、时间戳参数
+    - 调用 locate_output_files() 查找所有 HEX 文件
+    - 调用 locate_output_files() 查找所有 A2L 文件
+    - 对每个文件调用 move_output_file() 移动并重命名
+    - 使用 try-except 捕获移动失败
+    - 返回成功和失败的文件列表
+
+    Args:
+        source_path_hex: HEX 文件源路径
+        source_path_a2l: A2L 文件源路径
+        target_folder: 目标文件夹
+        timestamp: 时间戳
+
+    Returns:
+        tuple: (成功文件列表, 失败文件列表)
+            - 成功文件列表: List[Path]
+            - 失败文件列表: List[Tuple[Path, Exception]]
+
+    Examples:
+        >>> from pathlib import Path
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     base = Path(tmpdir)
+        ...     target = base / "output"
+        ...     target.mkdir()
+        ...     hex_source = base / "hex"
+        ...     hex_source.mkdir()
+        ...     (hex_source / "test.hex").touch()
+        ...     a2l_source = base / "a2l"
+        ...     a2l_source.mkdir()
+        ...     (a2l_source / "test.a2l").touch()
+        ...     success, failed = move_output_files_safe(hex_source, a2l_source, target, "_2026_02_14_16_35")
+        ...     assert len(success) == 2
+        ...     assert len(failed) == 0
+    """
+    from typing import Tuple, List
+
+    logger.info("批量移动开始")
+
+    success_files: List[Path] = []
+    failed_files: List[Tuple[Path, Exception]] = []
+
+    # 移动 HEX 文件
+    hex_files = locate_output_files(source_path_hex, "hex")
+    for hex_file in hex_files:
+        try:
+            target_file = move_output_file(hex_file, target_folder, timestamp)
+            success_files.append(target_file)
+        except Exception as e:
+            logger.error(f"HEX 文件移动失败: {hex_file} - {e}")
+            failed_files.append((hex_file, e))
+
+    # 移动 A2L 文件
+    a2l_files = locate_output_files(source_path_a2l, "a2l")
+    for a2l_file in a2l_files:
+        try:
+            target_file = move_output_file(a2l_file, target_folder, timestamp)
+            success_files.append(target_file)
+        except Exception as e:
+            logger.error(f"A2L 文件移动失败: {a2l_file} - {e}")
+            failed_files.append((a2l_file, e))
+
+    logger.info(f"批量移动完成: 成功 {len(success_files)} 个，失败 {len(failed_files)} 个")
+    return success_files, failed_files

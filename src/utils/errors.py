@@ -351,3 +351,148 @@ class FolderCreationError(FileOperationError):
         )
         self.folder_path = folder_path
         self.reason = reason
+
+
+# =============================================================================
+# Story 2.12: 文件移动错误
+# =============================================================================
+
+class FileMoveError(FileOperationError):
+    """文件移动失败
+
+    Story 2.12 - 任务 7.2-7.4:
+    - 文件移动失败的专用错误类
+    - 根据失败原因提供针对性建议
+    """
+
+    def __init__(self, message: str, suggestions: List[str] = None):
+        # 使用默认建议或自定义建议 (Story 2.12 - 任务 7.4)
+        default_suggestions = [
+            "检查目标文件夹权限",
+            "检查磁盘空间",
+            "检查文件是否被占用"
+        ]
+        if suggestions:
+            default_suggestions = suggestions
+
+        super().__init__(
+            message,
+            default_suggestions
+        )
+
+
+class OutputFileNotFoundError(FileOperationError):
+    """输出文件不存在
+
+    Story 2.12 - 任务 7.1, 7.3:
+    - 输出文件不存在的专用错误类
+    - 提供针对文件生成和路径配置的建议
+    """
+
+    def __init__(self, file_path: str, file_type: str = ""):
+        # 根据文件类型提供针对性建议 (Story 2.12 - 任务 7.3)
+        file_type_label = file_type.upper() if file_type else "输出"
+        suggestions = [
+            f"检查 {file_type_label} 文件生成是否成功",
+            "检查源路径配置是否正确",
+            "确认构建前序阶段已完成"
+        ]
+
+        super().__init__(
+            f"{file_type_label} 文件不存在: {file_path}",
+            suggestions
+        )
+        self.file_path = file_path
+        self.file_type = file_type
+
+
+# =============================================================================
+# Story 2.13: MATLAB 进程管理错误
+# =============================================================================
+
+class MatlabProcessError(ProcessError):
+    """MATLAB 进程错误
+
+    Story 2.13 - 任务 10.1:
+    - MATLAB 进程操作失败的专用错误类
+    - 提供可操作的修复建议
+
+    Attributes:
+        message: 错误消息
+        suggestions: 修复建议列表
+    """
+
+    def __init__(self, message: str, suggestions: List[str] = None):
+        default_suggestions = [
+            "检查 MATLAB 安装路径",
+            "验证 MATLAB Engine API 是否安装",
+            "检查磁盘空间",
+            "查看详细日志获取更多信息"
+        ]
+        if suggestions:
+            default_suggestions = suggestions
+
+        super().__init__(
+            "MATLAB",
+            message,
+            default_suggestions
+        )
+
+
+class MatlabConnectionError(MatlabProcessError):
+    """MATLAB 连接错误
+
+    Story 2.13 - 任务 10.2:
+    - 连接到 MATLAB 进程失败的专用错误类
+    - 提供连接失败的针对性建议
+
+    Attributes:
+        pid: 目标进程 PID
+    """
+
+    def __init__(self, pid: int, message: str = ""):
+        # 任务 10.4: 定义连接失败错误建议
+        suggestions = [
+            "检查 MATLAB 是否正在运行",
+            "尝试启动新进程",
+            "检查 MATLAB Engine API 安装",
+            "验证 MATLAB 进程 ID 是否正确"
+        ]
+
+        full_message = message or f"无法连接到 MATLAB 进程 PID: {pid}"
+
+        super().__init__(
+            full_message,
+            suggestions
+        )
+        self.pid = pid
+
+
+class MatlabVersionError(MatlabProcessError):
+    """MATLAB 版本错误
+
+    Story 2.13 - 任务 10.3:
+    - MATLAB 版本不兼容的专用错误类
+    - 提供版本升级建议
+
+    Attributes:
+        actual_version: 实际检测到的版本
+        required_version: 要求的最低版本
+    """
+
+    def __init__(self, actual_version: str, required_version: str = "R2020a"):
+        # 任务 10.5: 定义版本不兼容错误建议
+        suggestions = [
+            f"升级 MATLAB 到 {required_version} 或更高版本",
+            "使用兼容的 MATLAB 版本",
+            "联系系统管理员更新 MATLAB"
+        ]
+
+        full_message = f"MATLAB 版本不兼容: {actual_version} < {required_version}"
+
+        super().__init__(
+            full_message,
+            suggestions
+        )
+        self.actual_version = actual_version
+        self.required_version = required_version

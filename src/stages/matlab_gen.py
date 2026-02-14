@@ -68,9 +68,9 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
             timeout=config.timeout or get_stage_timeout(stage_name)
         )
 
-        # 启动 MATLAB 引擎 (Story 2.5 - 任务 1.4)
+        # 启动 MATLAB 引擎 (Story 2.5 - 任务 1.4, Story 2.13 - 任务 8.2)
         context.log("正在启动 MATLAB 引擎...")
-        if not matlab.start_engine():
+        if not matlab.start_engine(context.state):  # 传递 context.state 以支持进程管理
             return StageResult(
                 status=StageStatus.FAILED,
                 message="MATLAB 引擎启动失败",
@@ -130,7 +130,7 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
 
         finally:
             # 清理 MATLAB 进程
-            matlab.stop_engine()
+            matlab.stop_engine(context.state)  # 传递 context.state 以支持进程管理（Story 2.13）
 
         # 验证输出文件 (Story 2.5 - 任务 7)
         context.log("正在验证生成的代码文件...")

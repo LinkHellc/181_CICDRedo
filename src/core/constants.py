@@ -45,3 +45,23 @@ STAGE_DISPLAY_NAMES = {
     "a2l_process": "A2L 文件处理",
     "package": "最终文件打包"
 }
+
+# =============================================================================
+# Story 2.13: MATLAB 进程配置常量
+# =============================================================================
+
+# MATLAB 进程配置 (Story 2.13 - 任务 5.1-5.5)
+MATLAB_START_TIMEOUT = 60          # MATLAB 启动超时（秒）
+MATLAB_CONNECT_TIMEOUT = 10        # 连接超时（秒）
+MATLAB_MEMORY_LIMIT = "2GB"       # 内存限制
+MATLAB_MIN_VERSION = "R2020a"      # 最低支持版本
+
+# 默认启动选项
+MATLAB_DEFAULT_OPTIONS = [
+    "-nojvm",        # 禁用 JVM（可选，减少内存占用）
+    "-nodesktop",    # 无桌面模式
+    "-nosplash",     # 无启动画面
+]
+
+# MATLAB 进程名称
+MATLAB_PROCESS_NAMES = ["MATLAB.exe", "matlab.exe"]

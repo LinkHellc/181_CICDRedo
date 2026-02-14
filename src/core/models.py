@@ -62,6 +62,12 @@ class ProjectConfig:
     workflow_id: str = ""              # 选中的工作流模板 ID
     workflow_name: str = ""            # 工作流名称（用于显示）
 
+    # MATLAB 进程配置 (Story 2.13 - 任务 9)
+    matlab_reuse_existing: bool = True           # 是否复用现有 MATLAB 进程
+    matlab_close_after_build: bool = True       # 构建后是否关闭 MATLAB 进程
+    matlab_timeout: int = 60                     # MATLAB 启动超时（秒）
+    matlab_memory_limit: str = "2GB"             # MATLAB 内存限制
+
     def to_dict(self) -> dict:
         """转换为字典（排除 None 值和空字符串）
 
@@ -386,6 +392,29 @@ class BuildContext:
     state: dict = dataclasses.field(default_factory=dict)
     log_callback: Optional[callable] = None
     signal_emit: Optional[callable] = None
+
+    def log(self, message: str):
+        """记录日志
+
+        Args:
+            message: 日志消息
+        """
+        if self.log_callback:
+            self.log_callback(message)
+
+    def emit_signal(self, signal_name: str, *args, **kwargs):
+        """发送信号到 UI
+
+        Story 2.5 - 任务 6.5:
+        - 通过信号发送阶段完成时间和时长到 UI
+
+        Args:
+            signal_name: 信号名称
+            *args: 信号位置参数
+            **kwargs: 信号关键字参数
+        """
+        if self.signal_emit:
+            self.signal_emit(signal_name, *args, **kwargs)
 
 
 @dataclass

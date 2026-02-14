@@ -1,10 +1,14 @@
 """Package stage for MBD_CICDKits workflow.
 
 This module implements the package stage which creates a timestamped target folder
-for organizing build output files.
+for organizing build output files and moves HEX/A2L files to the target folder.
 
 Story 2.11: 创建时间戳目标文件夹
 - 任务 5: 实现文件归纳阶段执行函数
+- 任务 10: 添加日志记录
+
+Story 2.12: 移动 HEX 和 A2L 文件到目标文件夹
+- 任务 5: 扩展 package 阶段执行函数（添加文件移动逻辑）
 - 任务 10: 添加日志记录
 
 Architecture Decision 1.1:
@@ -22,41 +26,53 @@ import time
 from pathlib import Path
 
 from core.models import StageConfig, BuildContext, StageResult, StageStatus
-from utils.file_ops import create_target_folder_safe
-from utils.errors import FileOperationError
+from utils.file_ops import create_target_folder_safe, generate_timestamp, move_output_files_safe
+from utils.errors import FileOperationError, OutputFileNotFoundError
 
 logger = logging.getLogger(__name__)
 
 
 def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
-    """执行文件归纳阶段 - 创建时间戳目标文件夹
+    """执行文件归纳阶段 - 创建时间戳目标文件夹并移动输出文件
 
     Story 2.11 - 任务 5.1-5.7:
     - 接受 StageConfig 和 BuildContext 参数
     - 从 context.config 中读取目标文件路径配置
     - 调用 create_target_folder_safe() 创建目标文件夹
     - 将文件夹路径写入 context.state 供后续阶段使用
-    - 使用 context.log_callback 记录日志
-    - 返回 StageResult 对象
 
-    Story 2.11 - 任务 10.4-10.5:
+    Story 2.12 - 任务 5.1-5.10:
+    - 在创建目标文件夹后，读取源文件路径配置
+    - 读取 HEX 文件源路径配置
+    - 读取 A2L 文件源路径配置
+    - 生成时间戳（复用 generate_timestamp()）
+    - 调用 move_output_files_safe() 移动所有输出文件
+    - 验证所有文件移动成功
+    - 将最终文件位置写入 context.state
+    - 记录日志（INFO 级别：文件移动成功、最终位置）
+    - 返回包含输出文件列表的 StageResult
+
+    Story 2.11 - 任务 10.4-10.5, Story 2.12 - 任务 10.5-10.7:
     - 添加 INFO 级别日志（阶段开始/完成）
+    - 添加日志记录（最终文件位置）
     - 确保日志包含时间戳和详细信息
 
     Args:
         config: 阶段配置参数
             - base_path: 基础路径（从 context.config 读取）
             - folder_prefix: 文件夹名称前缀（从 context.config 读取）
+            - hex_source_path: HEX 文件源路径（从 context.config 读取）
+            - a2l_source_path: A2L 文件源路径（从 context.config 读取）
         context: 构建上下文
             - config: 全局配置（只读）
-            - state: 阶段状态（可写，用于传递目标文件夹路径）
+            - state: 阶段状态（可写，用于传递目标文件夹和输出文件路径）
             - log_callback: 日志回调
 
     Returns:
         StageResult: 包含成功/失败、输出、错误信息、建议
             - status: COMPLETED / FAILED
             - message: 阶段执行消息
-            - output_files: 创建的文件夹路径列表
+            - output_files: 创建的文件夹路径和移动的文件路径列表
             - error: 异常对象（失败时）
             - suggestions: 修复建议列表（失败时）
 
@@ -72,14 +88,16 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
     start_time = time.monotonic()
 
     # Story 2.11 - 任务 10.4: 记录阶段开始
-    logger.info(f"开始文件归纳阶段：创建时间戳目标文件夹")
+    logger.info(f"开始文件归纳阶段")
     if context.log_callback:
-        context.log_callback(f"[INFO] 开始文件归纳阶段：创建时间戳目标文件夹")
+        context.log_callback(f"[INFO] 开始文件归纳阶段")
 
     try:
-        # 读取配置 (Story 2.11 - 任务 5.3)
+        # 读取配置 (Story 2.11 - 任务 5.3, Story 2.12 - 任务 5.2-5.4)
         target_file_path = context.config.get("target_file_path", "")
         target_folder_prefix = context.config.get("target_folder_prefix", "MBD_CICD_Obj")
+        hex_source_path_str = context.config.get("hex_source_path", "")
+        a2l_source_path_str = context.config.get("a2l_source_path", "")
 
         # 验证配置 (Story 2.11 - 任务 6.2)
         if not target_file_path:
@@ -116,15 +134,176 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
                 ]
             )
 
+        # 验证 HEX 文件源路径配置 (Story 2.12 - 任务 6.2)
+        if not hex_source_path_str:
+            error_msg = "HEX 文件源路径配置为空"
+            logger.error(error_msg)
+            if context.log_callback:
+                context.log_callback(f"[ERROR] {error_msg}")
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=error_msg,
+                suggestions=[
+                    "检查配置文件中的 hex_source_path 字段",
+                    "确保 IAR 编译已完成"
+                ]
+            )
+
+        hex_source_path = Path(hex_source_path_str)
+        if not hex_source_path.exists():
+            error_msg = f"HEX 文件源路径不存在: {hex_source_path}"
+            logger.error(error_msg)
+            if context.log_callback:
+                context.log_callback(f"[ERROR] {error_msg}")
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=error_msg,
+                suggestions=[
+                    "检查 IAR 编译是否成功",
+                    "检查配置文件中的 hex_source_path 设置",
+                    f"确保路径存在: {hex_source_path}"
+                ]
+            )
+
+        # 验证 A2L 文件源路径配置 (Story 2.12 - 任务 6.3)
+        if not a2l_source_path_str:
+            error_msg = "A2L 文件源路径配置为空"
+            logger.error(error_msg)
+            if context.log_callback:
+                context.log_callback(f"[ERROR] {error_msg}")
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=error_msg,
+                suggestions=[
+                    "检查配置文件中的 a2l_source_path 字段",
+                    "确保 A2L 处理已完成"
+                ]
+            )
+
+        a2l_source_path = Path(a2l_source_path_str)
+        if not a2l_source_path.exists():
+            error_msg = f"A2L 文件源路径不存在: {a2l_source_path}"
+            logger.error(error_msg)
+            if context.log_callback:
+                context.log_callback(f"[ERROR] {error_msg}")
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=error_msg,
+                suggestions=[
+                    "检查 A2L 处理是否成功",
+                    "检查配置文件中的 a2l_source_path 设置",
+                    f"确保路径存在: {a2l_source_path}"
+                ]
+            )
+
         # 创建目标文件夹 (Story 2.11 - 任务 5.4)
         target_folder = create_target_folder_safe(base_path, target_folder_prefix)
+        logger.info(f"目标文件夹创建成功: {target_folder}")
+        if context.log_callback:
+            context.log_callback(f"[INFO] 目标文件夹创建成功: {target_folder}")
 
         # 写入上下文状态（供后续阶段使用） (Story 2.11 - 任务 5.5)
         context.state["target_folder"] = str(target_folder)
 
-        # Story 2.11 - 任务 10.5: 记录阶段完成
+        # 生成时间戳 (Story 2.12 - 任务 5.5)
+        timestamp = generate_timestamp()
+        logger.debug(f"生成时间戳: {timestamp}")
+
+        # 移动输出文件 (Story 2.12 - 任务 5.6)
+        logger.info("开始移动输出文件到目标文件夹")
+        if context.log_callback:
+            context.log_callback(f"[INFO] 开始移动输出文件到目标文件夹")
+
+        success_files, failed_files = move_output_files_safe(
+            hex_source_path,
+            a2l_source_path,
+            target_folder,
+            timestamp
+        )
+
+        # 写入上下文状态 (Story 2.12 - 任务 5.8)
+        context.state["output_files"] = {}
+        hex_files = [f for f in success_files if f.suffix.lower() == ".hex"]
+        a2l_files = [f for f in success_files if f.suffix.lower() == ".a2l"]
+
+        if hex_files:
+            context.state["output_files"]["hex"] = str(hex_files[0])
+        if a2l_files:
+            context.state["output_files"]["a2l"] = str(a2l_files[0])
+
+        # 验证所有文件移动成功 (Story 2.12 - 任务 5.7)
+        # 判断是否所有文件都失败
+        if not success_files:
+            # 所有文件都移动失败
+            error_msg = "所有文件移动失败"
+            suggestions = [f"{src.name}: {err}" for src, err in failed_files]
+
+            logger.error(error_msg)
+            if context.log_callback:
+                context.log_callback(f"[ERROR] {error_msg}")
+                for suggestion in suggestions:
+                    context.log_callback(f"[ERROR]   - {suggestion}")
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=error_msg,
+                output_files=[str(target_folder)],
+                error=OutputFileNotFoundError(
+                    "HEX/A2L 文件",
+                    file_type="HEX/A2L"
+                ),
+                suggestions=suggestions
+            )
+
+        # 判断是否有文件移动失败
+        if failed_files:
+            # 部分文件移动失败
+            total_files = len(success_files) + len(failed_files)
+            warning_msg = f"部分文件移动成功 ({len(success_files)}/{total_files})"
+            suggestions = [f"{src.name}: {err}" for src, err in failed_files]
+
+            logger.warning(warning_msg)
+            if context.log_callback:
+                context.log_callback(f"[WARNING] {warning_msg}")
+                for suggestion in suggestions:
+                    context.log_callback(f"[INFO]   - {suggestion}")
+
+            # 记录最终文件位置 (Story 2.12 - 任务 10.5)
+            final_hex = context.state["output_files"].get("hex", "N/A")
+            final_a2l = context.state["output_files"].get("a2l", "N/A")
+            logger.info(f"最终文件位置: HEX={final_hex}, A2L={final_a2l}")
+            if context.log_callback:
+                context.log_callback(f"[INFO] 最终文件位置: HEX={final_hex}, A2L={final_a2l}")
+
+            # Story 2.11 - 任务 10.5, Story 2.12 - 任务 10.5: 记录阶段完成
+            execution_time = time.monotonic() - start_time
+            if context.log_callback:
+                context.log_callback(f"[INFO] 文件归纳阶段完成，耗时 {execution_time:.2f} 秒")
+
+            return StageResult(
+                status=StageStatus.COMPLETED,
+                message=warning_msg,
+                output_files=[str(target_folder)] + [str(f) for f in success_files],
+                suggestions=suggestions,
+                execution_time=execution_time
+            )
+
+        # 所有文件移动成功
+        success_msg = "文件归纳完成"
+
+        # 记录最终文件位置 (Story 2.12 - 任务 10.5)
+        final_hex = context.state["output_files"].get("hex", "N/A")
+        final_a2l = context.state["output_files"].get("a2l", "N/A")
+        logger.info(f"最终文件位置: HEX={final_hex}, A2L={final_a2l}")
+        if context.log_callback:
+            context.log_callback(f"[INFO] 最终文件位置: HEX={final_hex}, A2L={final_a2l}")
+
+        # Story 2.11 - 任务 10.5, Story 2.12 - 任务 10.5: 记录阶段完成
         execution_time = time.monotonic() - start_time
-        success_msg = f"目标文件夹创建成功: {target_folder}"
         logger.info(success_msg)
         if context.log_callback:
             context.log_callback(f"[INFO] {success_msg}")
@@ -132,8 +311,8 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
 
         return StageResult(
             status=StageStatus.COMPLETED,
-            message="目标文件夹创建成功",
-            output_files=[str(target_folder)],
+            message=success_msg,
+            output_files=[str(target_folder)] + [str(f) for f in success_files],
             execution_time=execution_time
         )
 
