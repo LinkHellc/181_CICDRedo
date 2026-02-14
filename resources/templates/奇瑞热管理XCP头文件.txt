@@ -1,0 +1,16 @@
+/begin XCP
+  /* 奇瑞热管理 XCP 协议定义 */
+  /* 版本: 1.0 */
+  /* 日期: 2026-02-14 */
+
+  XCP_DRIVER_TYPE  = CAN
+  XCP_CAN_ID_BASE  = 0x7E0
+  XCP_CAN_ID_RESPONSE = 0x7E8
+
+  /begin IF_DATA XCP
+    /begin ADDRESS_MAP
+      /* 地址映射定义 */
+      /* ... */
+    /end ADDRESS_MAP
+  /end IF_DATA
+/end XCP

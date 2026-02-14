@@ -1,439 +1,626 @@
-"""Unit tests for A2L process stage.
+"""Unit tests for A2L XCP header replacement stage (Story 2.10).
 
-This module contains unit tests for the A2L file processing stage.
+This module tests the XCP header replacement functionality including:
+- XCP header template reading
+- XCP header section localization
+- Content replacement
+- File saving and renaming
+- Verification
+- Error handling and recovery suggestions
 
-Story 2.9 - Task 10: 编写单元测试
-- 测试 MATLAB 命令生成
-- 测试 A2L 文件验证逻辑
-- 测试超时处理
-- 测试错误处理和恢复建议
-- 测试日志回调调用
+Test Coverage:
+- Task 10.1: Create test file
+- Task 10.2: Test XCP header template reading
+- Task 10.3: Test XCP header section localization (various formats)
+- Task 10.4: Test content replacement
+- Task 10.5: Test file saving and renaming
+- Task 10.6: Test verification (success and failure scenarios)
+- Task 10.7: Test error handling and recovery suggestions
 """
 
-import logging
-import time
+import unittest
 import tempfile
 import shutil
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-import pytest
+from datetime import datetime
+from unittest.mock import patch, MagicMock
+
+# 添加 src 到路径
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from stages.a2l_process import (
-    A2LProcessConfig,
-    _generate_a2l_update_command,
-    _verify_a2l_updated,
-    _validate_configuration,
-    execute_stage,
-    _execute_matlab_command
+    read_xcp_header_template,
+    find_xcp_header_section,
+    replace_xcp_header_content,
+    generate_timestamp,
+    save_updated_a2l_file,
+    verify_a2l_replacement,
+    execute_xcp_header_replacement_stage,
+    XCP_HEADER_START_PATTERN,
+    XCP_HEADER_END_PATTERN,
+    XCP_HEADER_SECTION_PATTERN
 )
-from core.models import StageStatus, BuildContext
-from utils.errors import ProcessTimeoutError, ProcessError
+from core.models import (
+    StageConfig,
+    BuildContext,
+    A2LHeaderReplacementConfig,
+    StageStatus
+)
+from utils.errors import FileError
 
 
-class TestA2LProcessConfig:
-    """测试 A2LProcessConfig 配置类
+class TestXCPHeaderTemplateReading(unittest.TestCase):
+    """测试 XCP 头文件模板读取功能 (Task 10.2)"""
 
-    Story 2.9 - 任务 1.2-1.5
-    """
+    def setUp(self):
+        """测试前设置"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.log_messages = []
+        self.log_callback = lambda msg: self.log_messages.append(msg)
 
-    def test_a2l_config_defaults(self):
-        """测试 A2LProcessConfig 默认值"""
-        config = A2LProcessConfig()
+    def tearDown(self):
+        """测试后清理"""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-        assert config.name == ""
-        assert config.enabled is True
-        assert config.a2l_path == ""
-        assert config.elf_path == ""
-        assert config.timestamp_format == "_%Y_%m_%d_%H_%M"
-        # timeout 应该从 constants.py 中获取 a2l_process 的默认值
+    def test_read_template_success(self):
+        """测试成功读取模板文件"""
+        # 创建测试模板文件
+        template_path = Path(self.temp_dir) / "template.txt"
+        template_content = "/begin XCP\n  /* XCP content */\n/end XCP\n"
+        template_path.write_text(template_content, encoding='utf-8')
 
-    def test_a2l_config_custom_values(self):
-        """测试 A2LProcessConfig 自定义值"""
-        config = A2LProcessConfig(
-            name="a2l_process",
-            a2l_path="path/to/a2l",
-            elf_path="path/to/elf",
-            timeout=600
+        # 读取模板
+        result = read_xcp_header_template(template_path, self.log_callback)
+
+        # 验证
+        self.assertEqual(result, template_content)
+        self.assertTrue(any("读取 XCP 头文件模板" in msg for msg in self.log_messages))
+
+    def test_read_template_file_not_found(self):
+        """测试模板文件不存在"""
+        template_path = Path(self.temp_dir) / "nonexistent.txt"
+
+        # 应该抛出 FileNotFoundError
+        with self.assertRaises(FileNotFoundError):
+            read_xcp_header_template(template_path, self.log_callback)
+
+    def test_read_template_utf8_encoding(self):
+        """测试 UTF-8 编码读取"""
+        template_path = Path(self.temp_dir) / "template_utf8.txt"
+        template_content = "/begin XCP\n  /* 测试内容 */\n/end XCP\n"
+        template_path.write_text(template_content, encoding='utf-8')
+
+        result = read_xcp_header_template(template_path, self.log_callback)
+        self.assertEqual(result, template_content)
+
+    def test_read_template_gbk_encoding(self):
+        """测试 GBK 编码读取"""
+        template_path = Path(self.temp_dir) / "template_gbk.txt"
+        template_content = "/begin XCP\n  /* 测试内容 */\n/end XCP\n"
+        template_path.write_text(template_content, encoding='gbk')
+
+        # UTF-8 读取失败后会尝试 GBK
+        result = read_xcp_header_template(template_path, self.log_callback)
+        self.assertEqual(result, template_content)
+
+
+class TestXCPHeaderSectionLocalization(unittest.TestCase):
+    """测试 XCP 头文件部分定位功能 (Task 10.3)"""
+
+    def setUp(self):
+        """测试前设置"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.log_messages = []
+        self.log_callback = lambda msg: self.log_messages.append(msg)
+
+    def tearDown(self):
+        """测试后清理"""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_find_xcp_header_standard_format(self):
+        """测试标准格式的 XCP 头文件"""
+        a2l_content = """
+/begin CHARACTERISTIC
+  /* characteristic definition */
+/end CHARACTERISTIC
+
+/begin XCP
+  /* XCP header content */
+  XCP_DRIVER_TYPE = CAN
+/end XCP
+
+/begin MEASUREMENT
+  /* measurement definition */
+/end MEASUREMENT
+"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text(a2l_content, encoding='utf-8')
+
+        result = find_xcp_header_section(a2l_path, self.log_callback)
+
+        self.assertIsNotNone(result)
+        start_pos, end_pos = result
+        self.assertLess(start_pos, end_pos)
+        self.assertTrue(any("找到 XCP 头文件部分" in msg for msg in self.log_messages))
+
+    def test_find_xcp_header_with_comments(self):
+        """测试带注释的 XCP 头文件"""
+        a2l_content = """
+/* This is a comment */
+/begin XCP
+  /* XCP header with comments */
+  XCP_DRIVER_TYPE = CAN  /* Driver type */
+/end XCP
+"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text(a2l_content, encoding='utf-8')
+
+        result = find_xcp_header_section(a2l_path, self.log_callback)
+
+        self.assertIsNotNone(result)
+
+    def test_find_xcp_header_case_insensitive(self):
+        """测试大小写不敏感"""
+        a2l_content = """
+/BEGIN XCP
+  /* XCP content */
+/END XCP
+"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text(a2l_content, encoding='utf-8')
+
+        result = find_xcp_header_section(a2l_path, self.log_callback)
+
+        self.assertIsNotNone(result)
+
+    def test_find_xcp_header_not_found(self):
+        """测试未找到 XCP 头文件"""
+        a2l_content = """
+/begin CHARACTERISTIC
+  /* characteristic definition */
+/end CHARACTERISTIC
+"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text(a2l_content, encoding='utf-8')
+
+        result = find_xcp_header_section(a2l_path, self.log_callback)
+
+        self.assertIsNone(result)
+        self.assertTrue(any("错误" in msg for msg in self.log_messages))
+
+    def test_find_xcp_header_file_not_found(self):
+        """测试 A2L 文件不存在"""
+        a2l_path = Path(self.temp_dir) / "nonexistent.a2l"
+
+        with self.assertRaises(FileNotFoundError):
+            find_xcp_header_section(a2l_path, self.log_callback)
+
+
+class TestContentReplacement(unittest.TestCase):
+    """测试内容替换功能 (Task 10.4)"""
+
+    def setUp(self):
+        """测试前设置"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.log_messages = []
+        self.log_callback = lambda msg: self.log_messages.append(msg)
+
+    def tearDown(self):
+        """测试后清理"""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_replace_xcp_header_content(self):
+        """测试替换 XCP 头文件内容"""
+        # 创建测试 A2L 文件
+        a2l_content = """
+/begin CHARACTERISTIC
+  /* characteristic */
+/end CHARACTERISTIC
+
+/begin XCP
+  /* Old XCP header */
+  XCP_DRIVER_TYPE = OLD
+/end XCP
+
+/begin MEASUREMENT
+  /* measurement */
+/end MEASUREMENT
+"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text(a2l_content, encoding='utf-8')
+
+        # 定位 XCP 头文件部分
+        header_section = find_xcp_header_section(a2l_path, self.log_callback)
+        self.assertIsNotNone(header_section)
+
+        # 新的 XCP 头文件内容
+        new_xcp = "/begin XCP\n  /* New XCP header */\n  XCP_DRIVER_TYPE = NEW\n/end XCP\n"
+
+        # 替换
+        updated_content = replace_xcp_header_content(
+            a2l_path,
+            header_section,
+            new_xcp,
+            self.log_callback
         )
 
-        assert config.name == "a2l_process"
-        assert config.a2l_path == "path/to/a2l"
-        assert config.elf_path == "path/to/elf"
-        assert config.timeout == 600
+        # 验证
+        self.assertIn("New XCP header", updated_content)
+        self.assertNotIn("Old XCP header", updated_content)
+        self.assertIn("CHARACTERISTIC", updated_content)  # 其他内容保留
+        self.assertIn("MEASUREMENT", updated_content)  # 其他内容保留
+
+    def test_replace_content_logging(self):
+        """测试替换日志记录"""
+        a2l_content = """
+/begin XCP
+  /* Old header */
+/end XCP
+"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text(a2l_content, encoding='utf-8')
+
+        header_section = find_xcp_header_section(a2l_path, self.log_callback)
+        new_xcp = "/begin XCP\n  /* New header */\n/end XCP\n"
+
+        replace_xcp_header_content(a2l_path, header_section, new_xcp, self.log_callback)
+
+        # 验证日志
+        self.assertTrue(any("替换 XCP 头文件内容" in msg for msg in self.log_messages))
 
 
-class TestGenerateA2LUpdateCommand:
-    """测试 MATLAB 命令生成函数
+class TestFileSavingAndRenaming(unittest.TestCase):
+    """测试文件保存和重命名功能 (Task 10.5)"""
 
-    Story 2.9 - 任务 2.1-2.5
-    """
+    def setUp(self):
+        """测试前设置"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.log_messages = []
+        self.log_callback = lambda msg: self.log_messages.append(msg)
 
-    def test_generate_command_with_timestamp(self):
-        """测试带时间戳的命令生成"""
-        context = BuildContext()
-        context.state = {"build_timestamp": "_2025_02_14_10_30"}
-        config = A2LProcessConfig()
+    def tearDown(self):
+        """测试后清理"""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-        a2l_file, elf_file, command = _generate_a2l_update_command(context, config)
+    def test_generate_timestamp(self):
+        """测试时间戳生成"""
+        timestamp = generate_timestamp("_%Y_%m_%d_%H_%M")
 
-        assert a2l_file == "tmsAPP_2025_02_14_10_30.a2l"
-        assert elf_file == "CYT4BF_M7_Master.elf"
-        assert "rtw.asap2SetAddress" in command
-        assert "tmsAPP_2025_02_14_10_30.a2l" in command
-        assert "CYT4BF_M7_Master.elf" in command
+        # 验证格式
+        self.assertTrue(timestamp.startswith("_"))
+        self.assertEqual(len(timestamp), 17)  # _YYYY_MM_DD_HH_MM
 
-    def test_generate_command_without_timestamp(self):
-        """测试不带时间戳的命令生成"""
-        context = BuildContext()
-        context.state = {}
-        config = A2LProcessConfig()
+    def test_save_a2l_file_success(self):
+        """测试成功保存 A2L 文件"""
+        a2l_config = A2LHeaderReplacementConfig(
+            output_dir=self.temp_dir,
+            output_prefix="tmsAPP_upAdress"
+        )
+        updated_content = "/begin XCP\n  /* content */\n/end XCP\n"
 
-        a2l_file, elf_file, command = _generate_a2l_update_command(context, config)
+        output_path = save_updated_a2l_file(a2l_config, updated_content, self.log_callback)
 
-        assert a2l_file == "tmsAPP.a2l"
-        assert elf_file == "CYT4BF_M7_Master.elf"
-        assert "rtw.asap2SetAddress" in command
+        # 验证文件存在
+        self.assertTrue(output_path.exists())
+        self.assertTrue(output_path.name.startswith("tmsAPP_upAdress_"))
+        self.assertTrue(output_path.suffix == ".a2l")
 
-    def test_generate_command_with_custom_elf_path(self):
-        """测试自定义 ELF 文件路径"""
-        context = BuildContext()
-        context.state = {"build_timestamp": "_2025_02_14_10_30"}
-        config = A2LProcessConfig(elf_path="custom/path/custom_elf.elf")
+        # 验证文件内容
+        content = output_path.read_text(encoding='utf-8')
+        self.assertEqual(content, updated_content)
 
-        a2l_file, elf_file, command = _generate_a2l_update_command(context, config)
+    def test_save_a2l_file_atomically(self):
+        """测试原子性写入"""
+        a2l_config = A2LHeaderReplacementConfig(
+            output_dir=self.temp_dir,
+            output_prefix="tmsAPP_test"
+        )
+        updated_content = "/begin XCP\n  /* content */\n/end XCP\n"
 
-        assert a2l_file == "tmsAPP_2025_02_14_10_30.a2l"
-        assert elf_file == "custom_elf.elf"
-        assert "custom_elf.elf" in command
+        output_path = save_updated_a2l_file(a2l_config, updated_content, self.log_callback)
 
+        # 验证没有临时文件残留
+        temp_files = list(Path(self.temp_dir).glob("tmp*"))
+        self.assertEqual(len(temp_files), 0)
 
-class TestVerifyA2LUpdated:
-    """测试 A2L 文件验证函数
+    def test_save_a2l_file_create_dir(self):
+        """测试自动创建目录"""
+        output_dir = Path(self.temp_dir) / "subdir" / "nested"
+        a2l_config = A2LHeaderReplacementConfig(
+            output_dir=str(output_dir),
+            output_prefix="tmsAPP_test"
+        )
+        updated_content = "/begin XCP\n  /* content */\n/end XCP\n"
 
-    Story 2.9 - 任务 5.1-5.5
-    """
+        output_path = save_updated_a2l_file(a2l_config, updated_content, self.log_callback)
 
-    def test_verify_a2l_file_exists(self):
-        """测试验证存在的 A2L 文件"""
-        log_callback = Mock()
-
-        # 创建临时文件
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.a2l', delete=False) as f:
-            a2l_path = Path(f.name)
-            f.write("test a2l content")
-
-        try:
-            success, message = _verify_a2l_updated(a2l_path, log_callback)
-
-            assert success is True
-            assert "验证成功" in message
-            log_callback.assert_called()
-
-        finally:
-            # 清理临时文件
-            a2l_path.unlink()
-
-    def test_verify_a2l_file_not_exists(self):
-        """测试验证不存在的 A2L 文件"""
-        log_callback = Mock()
-        a2l_path = Path("/nonexistent/path/to/file.a2l")
-
-        success, message = _verify_a2l_updated(a2l_path, log_callback)
-
-        assert success is False
-        assert "不存在" in message
-
-    def test_verify_a2l_file_empty(self):
-        """测试验证空 A2L 文件"""
-        log_callback = Mock()
-
-        # 创建空文件
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.a2l', delete=False) as f:
-            a2l_path = Path(f.name)
-
-        try:
-            success, message = _verify_a2l_updated(a2l_path, log_callback)
-
-            assert success is False
-            assert "大小为 0" in message
-
-        finally:
-            # 清理临时文件
-            a2l_path.unlink()
+        # 验证目录和文件创建成功
+        self.assertTrue(output_dir.exists())
+        self.assertTrue(output_path.exists())
 
 
-class TestValidateConfiguration:
-    """测试配置验证函数
+class TestVerification(unittest.TestCase):
+    """测试验证功能 (Task 10.6)"""
 
-    Story 2.9 - 任务 12.1-12.5
-    """
+    def setUp(self):
+        """测试前设置"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.log_messages = []
+        self.log_callback = lambda msg: self.log_messages.append(msg)
 
-    def test_validate_config_with_valid_elf(self):
-        """测试验证有效配置"""
-        log_callback = Mock()
+    def tearDown(self):
+        """测试后清理"""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-        # 创建临时 ELF 文件
-        with tempfile.NamedTemporaryFile(mode='wb', suffix='.elf', delete=False) as f:
-            elf_path = Path(f.name)
-            f.write(b'\x7fELF')  # ELF magic number
+    def test_verify_success(self):
+        """测试验证成功"""
+        xcp_template = "/begin XCP\n  /* Test XCP header */\n  XCP_DRIVER_TYPE = CAN\n/end XCP\n"
 
-        try:
-            config = A2LProcessConfig(elf_path=str(elf_path))
-            context = BuildContext()
+        output_path = Path(self.temp_dir) / "output.a2l"
+        output_path.write_text(xcp_template, encoding='utf-8')
 
-            result = _validate_configuration(config, context, log_callback)
+        result = verify_a2l_replacement(output_path, xcp_template, self.log_callback)
 
-            # 验证应该通过，返回 None
-            assert result is None
-            log_callback.assert_called()
+        self.assertTrue(result)
+        self.assertTrue(any("验证成功" in msg for msg in self.log_messages))
 
-        finally:
-            # 清理临时文件
-            elf_path.unlink()
+    def test_verify_file_not_exists(self):
+        """测试文件不存在"""
+        xcp_template = "/begin XCP\n  /* content */\n/end XCP\n"
+        output_path = Path(self.temp_dir) / "nonexistent.a2l"
 
-    def test_validate_config_without_elf_path(self):
-        """测试验证无 ELF 路径的配置"""
-        log_callback = Mock()
-        config = A2LProcessConfig()
-        context = BuildContext()
+        result = verify_a2l_replacement(output_path, xcp_template, self.log_callback)
 
-        result = _validate_configuration(config, context, log_callback)
+        self.assertFalse(result)
+        self.assertTrue(any("验证失败" in msg for msg in self.log_messages))
 
-        # 验证应该失败
-        assert result is not None
-        assert result.status == StageStatus.FAILED
-        assert "未配置 ELF 文件路径" in result.message
-        assert len(result.suggestions) > 0
+    def test_verify_empty_file(self):
+        """测试空文件"""
+        xcp_template = "/begin XCP\n  /* content */\n/end XCP\n"
+        output_path = Path(self.temp_dir) / "empty.a2l"
+        output_path.write_text("", encoding='utf-8')
 
-    def test_validate_config_with_nonexistent_elf(self):
-        """测试验证 ELF 文件不存在"""
-        log_callback = Mock()
-        config = A2LProcessConfig(elf_path="/nonexistent/file.elf")
-        context = BuildContext()
+        result = verify_a2l_replacement(output_path, xcp_template, self.log_callback)
 
-        result = _validate_configuration(config, context, log_callback)
+        self.assertFalse(result)
 
-        # 验证应该失败
-        assert result is not None
-        assert result.status == StageStatus.FAILED
-        assert "不存在" in result.message
+    def test_verify_content_mismatch(self):
+        """测试内容不匹配"""
+        xcp_template = "/begin XCP\n  /* Test XCP */\n/end XCP\n"
 
-    def test_validate_config_with_empty_elf(self):
-        """测试验证空 ELF 文件"""
-        log_callback = Mock()
+        output_path = Path(self.temp_dir) / "output.a2l"
+        output_path.write_text("/begin OTHER\n  /* Different content */\n/end OTHER\n", encoding='utf-8')
 
-        # 创建空文件
-        with tempfile.NamedTemporaryFile(mode='wb', suffix='.elf', delete=False) as f:
-            elf_path = Path(f.name)
+        result = verify_a2l_replacement(output_path, xcp_template, self.log_callback)
 
-        try:
-            config = A2LProcessConfig(elf_path=str(elf_path))
-            context = BuildContext()
-
-            result = _validate_configuration(config, context, log_callback)
-
-            # 验证应该失败
-            assert result is not None
-            assert result.status == StageStatus.FAILED
-            assert "大小为 0" in result.message
-
-        finally:
-            # 清理临时文件
-            elf_path.unlink()
+        self.assertFalse(result)
 
 
-class TestExecuteStage:
-    """测试阶段执行主函数
+class TestErrorHandling(unittest.TestCase):
+    """测试错误处理和恢复建议 (Task 10.7)"""
 
-    Story 2.9 - 任务 3.1-3.5, 任务 8
-    """
+    def setUp(self):
+        """测试前设置"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.log_messages = []
+        self.log_callback = lambda msg: self.log_messages.append(msg)
 
-    def test_execute_stage_with_invalid_config_type(self):
-        """测试使用无效配置类型"""
-        from core.models import StageConfig
+    def tearDown(self):
+        """测试后清理"""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-        config = StageConfig(name="test")
-        context = BuildContext()
-        context.log = Mock()
-
-        result = execute_stage(config, context)
-
-        assert result.status == StageStatus.FAILED
-        assert "配置类型错误" in result.message
-
-    def test_execute_stage_without_elf_path(self):
-        """测试无 ELF 路径时执行"""
-        config = A2LProcessConfig(elf_path="")
-        context = BuildContext()
-        context.log = Mock()
-
-        result = execute_stage(config, context)
-
-        assert result.status == StageStatus.FAILED
-        assert "未配置 ELF 文件路径" in result.message
-        context.log.assert_called()
-
-    @patch('stages.a2l_process._execute_matlab_command')
-    def test_execute_stage_success(self, mock_execute):
-        """测试成功执行"""
-        # 模拟成功执行 MATLAB 命令
-        mock_execute.return_value = True
-
-        # 创建临时 ELF 文件
-        with tempfile.NamedTemporaryFile(mode='wb', suffix='.elf', delete=False) as f:
-            elf_path = Path(f.name)
-            f.write(b'\x7fELF')
-
-        # 创建临时 A2L 文件（模拟 MATLAB 生成）
-        # 注意：文件名必须与生成命令中的一致
-        a2l_filename = "tmsAPP_2025_02_14_10_30.a2l"
-        a2l_path = Path.cwd() / a2l_filename
-        a2l_path.write_text("test a2l content")
+    def test_template_not_found_error(self):
+        """测试模板文件不存在错误"""
+        template_path = Path(self.temp_dir) / "nonexistent.txt"
 
         try:
-            config = A2LProcessConfig(elf_path=str(elf_path))
-            context = BuildContext()
-            context.log = Mock()
-            context.state = {"build_timestamp": "_2025_02_14_10_30"}
+            read_xcp_header_template(template_path, self.log_callback)
+            self.fail("应该抛出 FileNotFoundError")
+        except FileNotFoundError:
+            # 预期的异常
+            pass
 
-            result = execute_stage(config, context)
-
-            assert result.status == StageStatus.COMPLETED
-            assert "成功" in result.message
-            assert len(result.output_files) > 0
-            context.log.assert_called()
-
-        finally:
-            # 清理临时文件
-            if elf_path.exists():
-                elf_path.unlink()
-            if a2l_path.exists():
-                a2l_path.unlink()
-
-    @patch('stages.a2l_process._execute_matlab_command')
-    def test_execute_stage_timeout(self, mock_execute):
-        """测试超时处理"""
-        # 模拟超时异常
-        mock_execute.side_effect = ProcessTimeoutError("MATLAB", 600)
-
-        # 创建临时 ELF 文件
-        with tempfile.NamedTemporaryFile(mode='wb', suffix='.elf', delete=False) as f:
-            elf_path = Path(f.name)
-            f.write(b'\x7fELF')
+    def test_a2l_file_not_found_error(self):
+        """测试 A2L 文件不存在错误"""
+        a2l_path = Path(self.temp_dir) / "nonexistent.a2l"
 
         try:
-            config = A2LProcessConfig(elf_path=str(elf_path))
-            context = BuildContext()
-            context.log = Mock()
+            find_xcp_header_section(a2l_path, self.log_callback)
+            self.fail("应该抛出 FileNotFoundError")
+        except FileNotFoundError:
+            # 预期的异常
+            pass
 
-            result = execute_stage(config, context)
+    def test_xcp_header_not_found_suggestion(self):
+        """测试未找到 XCP 头文件的建议"""
+        a2l_content = "/begin CHARACTERISTIC\n  /* char */\n/end CHARACTERISTIC\n"
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text(a2l_content, encoding='utf-8')
 
-            assert result.status == StageStatus.FAILED
-            assert "超时" in result.message
-            assert result.error is not None
-            assert len(result.suggestions) > 0
+        result = find_xcp_header_section(a2l_path, self.log_callback)
 
-        finally:
-            # 清理临时文件
-            elf_path.unlink()
-
-    @patch('stages.a2l_process._execute_matlab_command')
-    def test_execute_stage_process_error(self, mock_execute):
-        """测试进程错误处理"""
-        # 模拟进程错误
-        mock_execute.side_effect = ProcessError("MATLAB", "Test error")
-
-        # 创建临时 ELF 文件
-        with tempfile.NamedTemporaryFile(mode='wb', suffix='.elf', delete=False) as f:
-            elf_path = Path(f.name)
-            f.write(b'\x7fELF')
-
-        try:
-            config = A2LProcessConfig(elf_path=str(elf_path))
-            context = BuildContext()
-            context.log = Mock()
-
-            result = execute_stage(config, context)
-
-            assert result.status == StageStatus.FAILED
-            assert "失败" in result.message
-            assert result.error is not None
-            assert len(result.suggestions) > 0
-
-        finally:
-            # 清理临时文件
-            elf_path.unlink()
-
-    @patch('stages.a2l_process._execute_matlab_command')
-    def test_execute_stage_log_callback(self, mock_execute):
-        """测试日志回调调用"""
-        # 模拟成功执行
-        mock_execute.return_value = True
-
-        # 创建临时 ELF 文件
-        with tempfile.NamedTemporaryFile(mode='wb', suffix='.elf', delete=False) as f:
-            elf_path = Path(f.name)
-            f.write(b'\x7fELF')
-
-        # 创建临时 A2L 文件（模拟 MATLAB 生成）
-        a2l_filename = "tmsAPP_2025_02_14_10_30.a2l"
-        a2l_path = Path.cwd() / a2l_filename
-        a2l_path.write_text("test a2l content")
-
-        try:
-            config = A2LProcessConfig(elf_path=str(elf_path))
-            context = BuildContext()
-            context.log = Mock()
-            context.state = {"build_timestamp": "_2025_02_14_10_30"}
-
-            result = execute_stage(config, context)
-
-            # 验证日志回调被调用
-            assert context.log.call_count > 0
-
-            # 验证至少调用了开始、验证、命令、完成等日志
-            log_messages = [call[0][0] for call in context.log.call_args_list]
-            assert any("开始" in msg for msg in log_messages)
-            assert any("验证" in msg for msg in log_messages)
-            assert any("完成" in msg for msg in log_messages)
-
-        finally:
-            # 清理临时文件
-            if elf_path.exists():
-                elf_path.unlink()
-            if a2l_path.exists():
-                a2l_path.unlink()
+        self.assertIsNone(result)
+        self.assertTrue(any("错误" in msg for msg in self.log_messages))
 
 
-class TestExecuteMatlabCommand:
-    """测试 MATLAB 命令执行函数
+class TestExecuteXCPHeaderReplacementStage(unittest.TestCase):
+    """测试 XCP 头文件替换阶段执行 (集成测试)"""
 
-    Story 2.9 - 任务 3.3, 4.1-4.6, 7.1-7.5
+    def setUp(self):
+        """测试前设置"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.log_messages = []
+        self.log_callback = lambda msg: self.log_messages.append(msg)
 
-    注意：这些测试需要 MATLAB Engine API 环境
-    如果未安装，将被跳过
-    """
+    def tearDown(self):
+        """测试后清理"""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_execute_matlab_command_import_error(self):
-        """测试 MATLAB Engine API 未安装"""
-        # 使用 __import__ 来模拟导入错误
-        with patch('builtins.__import__') as mock_import:
-            # 配置 mock_import 抛出 ImportError
-            def import_side_effect(name, *args, **kwargs):
-                if name == 'matlab.engine':
-                    raise ImportError("No module named 'matlab.engine'")
-                return __import__(name, *args, **kwargs)
+    def test_execute_stage_success(self):
+        """测试成功执行阶段"""
+        # 创建测试 A2L 文件
+        a2l_content = """
+/begin CHARACTERISTIC
+  /* characteristic */
+/end CHARACTERISTIC
 
-            mock_import.side_effect = import_side_effect
-            log_callback = Mock()
+/begin XCP
+  /* Old XCP header */
+  XCP_DRIVER_TYPE = OLD
+/end XCP
 
-            with pytest.raises(ProcessError) as exc_info:
-                _execute_matlab_command("test_command()", 600, log_callback)
+/begin MEASUREMENT
+  /* measurement */
+/end MEASUREMENT
+"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text(a2l_content, encoding='utf-8')
 
-            # 验证错误消息和建议
-            assert "未安装" in str(exc_info.value)
-            assert len(exc_info.value.suggestions) > 0
+        # 创建 XCP 模板
+        template_path = Path(self.temp_dir) / "template.txt"
+        template_content = "/begin XCP\n  /* New XCP header */\n  XCP_DRIVER_TYPE = NEW\n/end XCP\n"
+        template_path.write_text(template_content, encoding='utf-8')
+
+        # 创建配置
+        a2l_config = A2LHeaderReplacementConfig(
+            xcp_template_path=str(template_path),
+            a2l_source_path=str(a2l_path),
+            output_dir=self.temp_dir,
+            output_prefix="tmsAPP_test"
+        )
+
+        # 使用 setattr 添加 custom_config 属性
+        stage_config = StageConfig(
+            name="a2l_process"
+        )
+        setattr(stage_config, "custom_config", a2l_config)
+
+        context = BuildContext(
+            log_callback=self.log_callback
+        )
+
+        # 执行阶段
+        result = execute_xcp_header_replacement_stage(stage_config, context)
+
+        # 验证结果
+        self.assertEqual(result.status, StageStatus.COMPLETED)
+        self.assertEqual(len(result.output_files), 1)
+
+        # 验证输出文件
+        output_path = Path(result.output_files[0])
+        self.assertTrue(output_path.exists())
+        self.assertTrue(output_path.name.startswith("tmsAPP_test_"))
+
+        # 验证内容已替换
+        content = output_path.read_text(encoding='utf-8')
+        self.assertIn("New XCP header", content)
+        self.assertNotIn("Old XCP header", content)
+
+    def test_execute_stage_template_not_found(self):
+        """测试模板文件不存在"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text("/begin XCP\n  /* content */\n/end XCP\n", encoding='utf-8')
+
+        a2l_config = A2LHeaderReplacementConfig(
+            xcp_template_path="nonexistent.txt",
+            a2l_source_path=str(a2l_path),
+            output_dir=self.temp_dir
+        )
+
+        # 使用 setattr 添加 custom_config 属性
+        stage_config = StageConfig(
+            name="a2l_process"
+        )
+        setattr(stage_config, "custom_config", a2l_config)
+
+        context = BuildContext(log_callback=self.log_callback)
+
+        result = execute_xcp_header_replacement_stage(stage_config, context)
+
+        self.assertEqual(result.status, StageStatus.FAILED)
+        self.assertTrue(len(result.suggestions) > 0)
+
+    def test_execute_stage_a2l_not_found(self):
+        """测试 A2L 文件不存在"""
+        template_path = Path(self.temp_dir) / "template.txt"
+        template_path.write_text("/begin XCP\n  /* content */\n/end XCP\n", encoding='utf-8')
+
+        a2l_config = A2LHeaderReplacementConfig(
+            xcp_template_path=str(template_path),
+            a2l_source_path="nonexistent.a2l",
+            output_dir=self.temp_dir
+        )
+
+        # 使用 setattr 添加 custom_config 属性
+        stage_config = StageConfig(
+            name="a2l_process"
+        )
+        setattr(stage_config, "custom_config", a2l_config)
+
+        context = BuildContext(log_callback=self.log_callback)
+
+        result = execute_xcp_header_replacement_stage(stage_config, context)
+
+        self.assertEqual(result.status, StageStatus.FAILED)
+        self.assertTrue(len(result.suggestions) > 0)
+
+    def test_execute_stage_xcp_header_not_found(self):
+        """测试未找到 XCP 头文件"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text("/begin CHARACTERISTIC\n  /* char */\n/end CHARACTERISTIC\n", encoding='utf-8')
+
+        template_path = Path(self.temp_dir) / "template.txt"
+        template_path.write_text("/begin XCP\n  /* content */\n/end XCP\n", encoding='utf-8')
+
+        a2l_config = A2LHeaderReplacementConfig(
+            xcp_template_path=str(template_path),
+            a2l_source_path=str(a2l_path),
+            output_dir=self.temp_dir
+        )
+
+        # 使用 setattr 添加 custom_config 属性
+        stage_config = StageConfig(
+            name="a2l_process"
+        )
+        setattr(stage_config, "custom_config", a2l_config)
+
+        context = BuildContext(log_callback=self.log_callback)
+
+        result = execute_xcp_header_replacement_stage(stage_config, context)
+
+        self.assertEqual(result.status, StageStatus.FAILED)
+        self.assertTrue(len(result.suggestions) > 0)
+
+    def test_execute_stage_context_integration(self):
+        """测试 BuildContext 集成"""
+        a2l_path = Path(self.temp_dir) / "test.a2l"
+        a2l_path.write_text("/begin XCP\n  /* Old */\n/end XCP\n", encoding='utf-8')
+
+        template_path = Path(self.temp_dir) / "template.txt"
+        template_path.write_text("/begin XCP\n  /* New */\n/end XCP\n", encoding='utf-8')
+
+        a2l_config = A2LHeaderReplacementConfig(
+            xcp_template_path=str(template_path),
+            a2l_source_path=str(a2l_path),
+            output_dir=self.temp_dir
+        )
+
+        # 使用 setattr 添加 custom_config 属性
+        stage_config = StageConfig(
+            name="a2l_process"
+        )
+        setattr(stage_config, "custom_config", a2l_config)
+
+        context = BuildContext(log_callback=self.log_callback)
+
+        result = execute_xcp_header_replacement_stage(stage_config, context)
+
+        # 验证 BuildContext 已更新
+        self.assertEqual(result.status, StageStatus.COMPLETED)
+        self.assertIn("a2l_output_path", context.state)
+        self.assertIn("a2l_xcp_replaced_path", context.state)
 
 
 if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+    unittest.main()

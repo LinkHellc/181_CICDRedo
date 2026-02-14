@@ -574,3 +574,32 @@ class ValidationResult:
             指定严重级别的错误列表
         """
         return [e for e in self.errors if e.severity == severity]
+
+
+@dataclass
+class A2LHeaderReplacementConfig:
+    """A2L 头文件替换配置 (Story 2.10 - 任务 1.1-1.5)
+
+    用于 A2L 文件 XCP 头文件内容替换的配置。
+
+    Architecture Decision 1.2:
+    - 所有字段提供默认值
+    - 使用 field(default_factory=...) 避免可变默认值陷阱
+    - 使用 Path 对象处理路径（便于序列化）
+
+    Attributes:
+        xcp_template_path: XCP 头文件模板路径
+        a2l_source_path: A2L 源文件路径（从 BuildContext 获取）
+        output_dir: 输出目录路径（从 BuildContext 获取）
+        timestamp_format: 时间戳格式（默认 "_%Y_%m_%d_%H_%M"）
+        output_prefix: 输出文件前缀（默认 "tmsAPP_upAdress"）
+        encoding: 文件编码（默认 "utf-8"）
+        backup_before_replace: 替换前备份（默认 True）
+    """
+    xcp_template_path: str = "resources/templates/奇瑞热管理XCP头文件.txt"
+    a2l_source_path: str = ""
+    output_dir: str = ""
+    timestamp_format: str = "_%Y_%m_%d_%H_%M"
+    output_prefix: str = "tmsAPP_upAdress"
+    encoding: str = "utf-8"
+    backup_before_replace: bool = True

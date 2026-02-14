@@ -174,6 +174,13 @@ def _execute_a2l_process(config, context) -> StageResult:
     - 确保阶段按工作流顺序执行（iar_compile → a2l_process）
     - 测试工作流集成
 
+    Story 2.10 - 任务 8.1-8.5:
+    - 更新 a2l_process 执行器为 XCP 头文件替换阶段
+    - 指向 stages.a2l_process.execute_xcp_header_replacement_stage
+    - 确保 a2l_process 在 iar_compile 之后执行（依赖关系）
+    - 确保在 package 之前执行（输出文件传递）
+    - 在 BuildContext 中传递 A2L 文件路径给下一阶段
+
     Args:
         config: 阶段配置
         context: 构建上下文
@@ -183,15 +190,15 @@ def _execute_a2l_process(config, context) -> StageResult:
     """
     try:
         # 动态导入以避免循环依赖
-        from stages.a2l_process import execute_stage
-        return execute_stage(config, context)
+        from stages.a2l_process import execute_xcp_header_replacement_stage
+        return execute_xcp_header_replacement_stage(config, context)
     except ImportError as e:
         logger.error(f"无法导入 a2l_process 模块: {e}")
         return StageResult(
             status=StageStatus.FAILED,
             message=f"A2L 处理模块未实现",
             error=e,
-            suggestions=["确保 Story 2.9 已正确实现"]
+            suggestions=["确保 Story 2.9 和 Story 2.10 已正确实现"]
         )
 
 # 阶段依赖规则（Story 2.3 Task 2.2, Story 2.7 任务 6.3, Story 2.8 任务 5.3）
