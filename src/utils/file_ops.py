@@ -8,6 +8,12 @@ Story 2.6 - 任务 1: 创建文件处理工具模块
 - 支持递归文件搜索
 - 支持排除指定文件
 
+Story 2.11 - 任务 1-4: 创建时间戳目标文件夹
+- 实现 generate_timestamp() 函数（时间戳生成）
+- 实现 create_target_folder() 函数（文件夹创建）
+- 实现 check_folder_exists() 函数（冲突处理）
+- 实现 create_target_folder_safe() 函数（安全创建）
+
 Architecture Decision 4.2:
 - 使用 pathlib.Path 处理 Windows 长路径
 - 提供可预测的排序输出
@@ -16,6 +22,8 @@ Architecture Decision 4.2:
 import logging
 from pathlib import Path
 from typing import List, Optional
+from datetime import datetime
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -533,3 +541,215 @@ def move_code_files(
         result["error"] = f"移动过程异常: {e}"
         result["success"] = False
         return result
+
+
+# =============================================================================
+# Story 2.11: 创建时间戳目标文件夹
+# =============================================================================
+
+def generate_timestamp() -> str:
+    """生成时间戳
+
+    Story 2.11 - 任务 1.1-1.3:
+    - 使用 datetime.now() 获取当前时间
+    - 格式化时间戳为 _年_月_日_时_分 格式
+
+    Architecture Decision 5.1:
+    - 使用 datetime 模块生成标准格式
+    - 格式字符串: _%Y_%m_%d_%H_%M
+
+    Returns:
+        str: 时间戳格式为 _年_月_日_时_分，如 _2025_02_02_15_43
+
+    Examples:
+        >>> ts = generate_timestamp()
+        >>> assert ts.startswith("_")
+        >>> assert len(ts) == 16  # _YYYY_MM_DD_HH_MM
+    """
+    return datetime.now().strftime("_%Y_%m_%d_%H_%M")
+
+
+def create_target_folder(base_path: Path, folder_prefix: str) -> Path:
+    """创建目标文件夹（不处理冲突）
+
+    Story 2.11 - 任务 2.1-2.5:
+    - 接受基础路径和文件夹名称前缀参数
+    - 调用 generate_timestamp() 生成时间戳
+    - 拼接完整路径：基础路径/前缀[_时间戳]
+    - 使用 pathlib.Path 创建目录（包含父目录）
+
+    Args:
+        base_path: 基础路径（如 Path("E:/Projects/BuildOutput")）
+        folder_prefix: 文件夹名称前缀（如 "MBD_CICD_Obj"）
+
+    Returns:
+        Path: 创建的文件夹路径
+
+    Raises:
+        FileExistsError: 文件夹已存在
+
+    Examples:
+        >>> from pathlib import Path
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     result = create_target_folder(Path(tmpdir), "TestFolder")
+        ...     assert result.exists()
+        ...     assert result.name.startswith("TestFolder_")
+    """
+    timestamp = generate_timestamp()
+    folder_name = f"{folder_prefix}{timestamp}"
+    folder_path = base_path / folder_name
+    folder_path.mkdir(parents=True, exist_ok=False)
+    logger.debug(f"创建目标文件夹: {folder_path}")
+    return folder_path
+
+
+def check_folder_exists(folder_path: Path, max_attempts: int = 100) -> Path:
+    """检查文件夹是否存在，如果存在则添加后缀
+
+    Story 2.11 - 任务 3.1-3.4:
+    - 检查目标路径是否存在
+    - 如果不存在，直接返回原路径
+    - 如果存在，添加递增后缀：MBD_CICD_Obj[_时间戳]_1, _2, _3...
+
+    Args:
+        folder_path: 目标文件夹路径
+        max_attempts: 最大重试次数（默认 100）
+
+    Returns:
+        Path: 可用的文件夹路径（可能添加了后缀）
+
+    Raises:
+        FileOperationError: 已尝试 max_attempts 次仍无法创建
+
+    Examples:
+        >>> from pathlib import Path
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     base = Path(tmpdir)
+        ...     folder1 = base / "TestFolder_2025_02_02_15_43"
+        ...     folder1.mkdir()
+        ...     # 第一个已存在，应该添加 _1 后缀
+        ...     result = check_folder_exists(folder1)
+        ...     assert result.name == "TestFolder_2025_02_02_15_43_1"
+    """
+    if not folder_path.exists():
+        return folder_path
+
+    base = folder_path.stem
+    suffix = folder_path.suffix
+    parent = folder_path.parent
+
+    for i in range(1, max_attempts + 1):
+        new_name = f"{base}_{i}{suffix}"
+        new_path = parent / new_name
+        if not new_path.exists():
+            logger.debug(f"检测到冲突，使用后缀: {new_name}")
+            return new_path
+
+    # 所有重试都失败
+    from utils.errors import FileOperationError
+    raise FileOperationError(
+        f"无法创建文件夹，已尝试 {max_attempts} 次",
+        suggestions=[
+            f"检查是否有大量同名文件夹",
+            f"手动清理 {parent}",
+            "选择其他目标目录"
+        ]
+    )
+
+
+def create_target_folder_safe(
+    base_path: Path,
+    folder_prefix: str = "MBD_CICD_Obj",
+    max_attempts: int = 100
+) -> Path:
+    """安全创建目标文件夹（处理冲突和错误）
+
+    Story 2.11 - 任务 4.1-4.5:
+    - 集成时间戳生成、文件夹创建、冲突处理逻辑
+    - 返回最终创建的文件夹路径
+    - 使用 try-except 捕获文件系统错误
+    - 使用 logging 模块记录操作日志
+
+    Args:
+        base_path: 基础路径
+        folder_prefix: 文件夹名称前缀（默认 "MBD_CICD_Obj"）
+        max_attempts: 最大重试次数（默认 100）
+
+    Returns:
+        Path: 最终创建的文件夹路径
+
+    Raises:
+        FileOperationError: 文件操作失败
+        FolderCreationError: 文件夹创建失败
+
+    Examples:
+        >>> from pathlib import Path
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     result = create_target_folder_safe(Path(tmpdir), "TestFolder")
+        ...     assert result.exists()
+        ...     assert result.name.startswith("TestFolder_")
+    """
+    try:
+        timestamp = generate_timestamp()
+        folder_name = f"{folder_prefix}{timestamp}"
+        folder_path = base_path / folder_name
+
+        # 检查冲突 (Story 2.11 - 任务 4.2)
+        folder_path = check_folder_exists(folder_path, max_attempts)
+
+        # 创建文件夹 (Story 2.11 - 任务 4.2)
+        folder_path.mkdir(parents=True, exist_ok=False)
+
+        logger.info(f"目标文件夹创建成功: {folder_path}")
+        return folder_path
+
+    except PermissionError as e:
+        logger.error(f"文件夹创建失败（权限不足）: {folder_path} - {e}")
+        from utils.errors import FolderCreationError
+        raise FolderCreationError(
+            str(folder_path),
+            reason="权限不足"
+        )
+
+    except OSError as e:
+        # 检查是否是磁盘空间不足
+        if "No space left" in str(e):
+            logger.error(f"文件夹创建失败（磁盘空间不足）: {folder_path} - {e}")
+            from utils.errors import FolderCreationError
+            raise FolderCreationError(
+                str(folder_path),
+                reason="磁盘空间不足"
+            )
+        # 检查是否是路径不存在
+        elif "No such file" in str(e):
+            logger.error(f"文件夹创建失败（路径不存在）: {folder_path} - {e}")
+            from utils.errors import FolderCreationError
+            raise FolderCreationError(
+                str(folder_path),
+                reason="路径不存在"
+            )
+        else:
+            logger.error(f"文件夹创建失败: {folder_path} - {e}")
+            from utils.errors import FileOperationError
+            raise FileOperationError(
+                f"文件夹创建失败: {e}",
+                suggestions=[
+                    "检查磁盘空间",
+                    "检查目录权限",
+                    "查看详细日志"
+                ]
+            )
+
+    except Exception as e:
+        logger.error(f"文件夹创建失败（未知错误）: {folder_path} - {e}")
+        from utils.errors import FileOperationError
+        raise FileOperationError(
+            f"文件夹创建失败: {e}",
+            suggestions=[
+                "查看详细日志",
+                "联系技术支持"
+            ]
+        )

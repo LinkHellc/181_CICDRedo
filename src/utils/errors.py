@@ -2,6 +2,11 @@
 
 This module provides exception classes with helpful suggestions
 for resolving configuration errors.
+
+Story 2.11 - 任务 8.1-8.2:
+- 添加 FileOperationError 错误类
+- 添加 FolderCreationError 错误类
+- 定义权限不足、磁盘空间不足、路径不存在错误建议
 """
 
 from typing import List
@@ -272,4 +277,77 @@ class FileVerificationError(FileError):
             ]
         )
         self.file_path = file_path
+        self.reason = reason
+
+
+# =============================================================================
+# Story 2.11: 文件操作和文件夹创建错误
+# =============================================================================
+
+class FileOperationError(Exception):
+    """文件操作错误基类
+
+    Story 2.11 - 任务 8.1:
+    - 提供统一的错误处理和可操作的修复建议
+    - 支持所有文件操作错误的基类
+
+    Attributes:
+        message: 错误消息
+        suggestions: 修复建议列表
+    """
+
+    def __init__(self, message: str, suggestions: List[str] = None):
+        super().__init__(message)
+        self.suggestions = suggestions or []
+
+    def __str__(self):
+        msg = super().__str__()
+        if self.suggestions:
+            msg += "\n建议操作:\n" + "\n".join(f"  - {s}" for s in self.suggestions)
+        return msg
+
+
+class FolderCreationError(FileOperationError):
+    """文件夹创建失败
+
+    Story 2.11 - 任务 8.2-8.5:
+    - 文件夹创建失败的专用错误类
+    - 根据失败原因提供针对性建议
+
+    Attributes:
+        folder_path: 文件夹路径
+        reason: 失败原因（权限不足、磁盘空间不足、路径不存在等）
+    """
+
+    def __init__(self, folder_path: str, reason: str = ""):
+        # 根据失败原因提供针对性建议 (Story 2.11 - 任务 8.3-8.5)
+        if "权限不足" in reason or "Permission" in reason:
+            suggestions = [
+                "以管理员身份运行",
+                "检查目录权限设置",
+                "选择其他目标目录"
+            ]
+        elif "磁盘空间" in reason or "No space" in reason:
+            suggestions = [
+                "清理磁盘空间",
+                "选择其他目标目录"
+            ]
+        elif "路径不存在" in reason or "No such file" in reason:
+            suggestions = [
+                "创建目标目录",
+                "检查配置文件中的路径设置"
+            ]
+        else:
+            suggestions = [
+                "检查目录权限",
+                "检查磁盘空间",
+                "验证路径合法性",
+                "查看详细日志"
+            ]
+
+        super().__init__(
+            f"无法创建文件夹: {folder_path} - {reason}",
+            suggestions
+        )
+        self.folder_path = folder_path
         self.reason = reason
