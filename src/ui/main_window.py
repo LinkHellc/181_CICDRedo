@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QSize, QThread
 from PyQt6.QtGui import QAction, QFont, QIcon
+from PyQt6.QtCore import Qt as QtConstants
 
 from core.config import list_saved_projects, load_config
 from utils.errors import ConfigLoadError
@@ -30,6 +31,7 @@ from core.workflow_manager import WorkflowManager
 from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.validation_result_dialog import show_validation_result
 from ui.styles.industrial_theme import apply_industrial_theme, BrandColors, FontManager
+from ui.widgets.log_viewer import LogViewer
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,9 @@ class MainWindow(QMainWindow):
 
         # ===== 状态概览卡片 =====
         layout.addWidget(self._create_status_card())
+
+        # ===== 日志查看器卡片 =====
+        layout.addWidget(self._create_log_viewer_card())
 
         layout.addStretch()
 
@@ -348,6 +353,40 @@ class MainWindow(QMainWindow):
         stats_row.addWidget(self.project_count_label)
         stats_row.addStretch()
         layout.addLayout(stats_row)
+
+        return card
+
+    def _create_log_viewer_card(self) -> QFrame:
+        """创建日志查看器卡片"""
+        card = QFrame()
+        card.setProperty("elevated", True)
+
+        layout = QVBoxLayout(card)
+        layout.setSpacing(16)
+        layout.setContentsMargins(28, 24, 28, 24)
+
+        # 卡片标题和操作按钮
+        header_row = QHBoxLayout()
+
+        title = QLabel("📋 实时日志")
+        title.setProperty("subheading", True)
+        header_row.addWidget(title)
+
+        header_row.addStretch()
+
+        # 清空日志按钮
+        clear_btn = QPushButton("🗑️ 清空")
+        clear_btn.setProperty("icon-btn", True)
+        clear_btn.setToolTip("清空日志")
+        clear_btn.clicked.connect(self._clear_log_viewer)
+        header_row.addWidget(clear_btn)
+
+        layout.addLayout(header_row)
+
+        # 日志查看器
+        self.log_viewer = LogViewer()
+        self.log_viewer.setMinimumHeight(300)
+        layout.addWidget(self.log_viewer)
 
         return card
 
@@ -769,9 +808,17 @@ class MainWindow(QMainWindow):
         # TODO: 更新UI中的阶段状态显示 (Story 3.1)
 
     def _on_log_message(self, message: str):
-        """日志消息回调 (Story 2.4 Task 4.4)"""
-        # TODO: 显示在日志查看器中 (Story 3.2)
+        """日志消息回调 (Story 2.4 Task 4.4, Story 2.15 Task 6.3)"""
+        # 显示在日志查看器中 (Story 2.15 Task 6.3)
+        if hasattr(self, 'log_viewer'):
+            self.log_viewer.append_log(message)
         logger.info(message)
+
+    def _clear_log_viewer(self):
+        """清空日志查看器"""
+        if hasattr(self, 'log_viewer'):
+            self.log_viewer.clear_log()
+            logger.info("日志查看器已清空")
 
     def _on_error_occurred(self, error: str, suggestions: list):
         """错误发生回调 (Story 2.4 Task 5)"""

@@ -211,6 +211,16 @@ STAGE_DEPENDENCIES = {
     "package": ["iar_compile", "a2l_process"]  # 依赖 iar_compile 和 a2l_process
 }
 
+# 核心阶段依赖关系（Story 2.14 - 任务 2.2）
+# 定义 5 个核心阶段的依赖关系（简化版，不包含 file_move）
+CORE_STAGE_DEPENDENCIES = {
+    "matlab_gen": [],           # 无依赖
+    "file_process": ["matlab_gen"],  # 依赖 matlab_gen
+    "iar_compile": ["file_process"],  # 依赖 file_process
+    "a2l_process": ["iar_compile"],  # 依赖 iar_compile
+    "package": ["a2l_process"]  # 依赖 a2l_process
+}
+
 # 阶段执行顺序（用于检查顺序合理性）
 STAGE_ORDER = [
     "matlab_gen",
@@ -589,6 +599,179 @@ def get_required_params_info(stage_name: str) -> List[str]:
         必需参数名称列表
     """
     return REQUIRED_PARAMS.get(stage_name, [])
+
+
+# =============================================================================
+# Story 2.14: 启用/禁用工作流阶段 - 依赖关系管理
+# =============================================================================
+
+def get_stage_dependencies(stage_name: str) -> List[str]:
+    """获取阶段的前置依赖 (Story 2.14 - 任务 2.3)
+
+    获取指定阶段的前置依赖阶段列表。
+
+    Args:
+        stage_name: 阶段名称
+
+    Returns:
+        前置依赖阶段名称列表
+
+    Examples:
+        >>> get_stage_dependencies("iar_compile")
+        ["matlab_gen", "file_process"]
+        >>> get_stage_dependencies("matlab_gen")
+        []
+    """
+    if stage_name not in CORE_STAGE_DEPENDENCIES:
+        logger.warning(f"未知阶段: {stage_name}")
+        return []
+
+    dependencies = CORE_STAGE_DEPENDENCIES[stage_name]
+
+    # 递归获取所有前置依赖（包括间接依赖）
+    # 注意：先递归获取间接依赖，再添加直接依赖，确保顺序正确
+    all_dependencies = []
+    for dep in dependencies:
+        # 先获取间接依赖
+        all_dependencies.extend(get_stage_dependencies(dep))
+        # 再添加当前依赖
+        all_dependencies.append(dep)
+
+    # 去重并保持顺序
+    seen = set()
+    result = []
+    for dep in all_dependencies:
+        if dep not in seen:
+            seen.add(dep)
+            result.append(dep)
+
+    logger.debug(f"阶段 {stage_name} 的前置依赖: {result}")
+    return result
+
+
+def get_dependent_stages(stage_name: str) -> List[str]:
+    """获取阶段的后置依赖 (Story 2.14 - 任务 2.4)
+
+    获取依赖指定阶段的所有后续阶段列表。
+
+    Args:
+        stage_name: 阶段名称
+
+    Returns:
+        后置依赖阶段名称列表
+
+    Examples:
+        >>> get_dependent_stages("matlab_gen")
+        ["file_process", "iar_compile", "a2l_process", "package"]
+        >>> get_dependent_stages("package")
+        []
+    """
+    if stage_name not in CORE_STAGE_DEPENDENCIES:
+        logger.warning(f"未知阶段: {stage_name}")
+        return []
+
+    dependents = []
+
+    # 查找所有依赖当前阶段的阶段
+    for name, deps in CORE_STAGE_DEPENDENCIES.items():
+        if stage_name in deps:
+            dependents.append(name)
+            # 递归获取后置依赖的后置依赖
+            dependents.extend(get_dependent_stages(name))
+
+    # 去重并保持顺序
+    seen = set()
+    result = []
+    for dep in dependents:
+        if dep not in seen:
+            seen.add(dep)
+            result.append(dep)
+
+    logger.debug(f"阶段 {stage_name} 的后置依赖: {result}")
+    return result
+
+
+def adjust_stage_dependencies(
+    stages: List,
+    stage_name: str,
+    enabled: bool
+) -> None:
+    """自动调整阶段依赖关系 (Story 2.14 - 任务 3)
+
+    根据阶段启用/禁用状态，自动调整相关阶段的启用状态。
+
+    Args:
+        stages: 阶段配置列表
+        stage_name: 被修改的阶段名称
+        enabled: 新的启用状态（True=启用，False=禁用）
+
+    Examples:
+        >>> # 禁用 file_process，自动禁用 iar_compile, a2l_process, package
+        >>> adjust_stage_dependencies(stages, "file_process", False)
+
+        >>> # 启用 package，自动启用 a2l_process, iar_compile, file_process, matlab_gen
+        >>> adjust_stage_dependencies(stages, "package", True)
+    """
+    if not stages:
+        logger.warning("阶段配置列表为空")
+        return
+
+    # 查找被修改的阶段
+    target_stage = None
+    for stage in stages:
+        if hasattr(stage, "name") and stage.name == stage_name:
+            target_stage = stage
+            break
+
+    if not target_stage:
+        logger.warning(f"未找到阶段: {stage_name}")
+        return
+
+    # 更新被修改的阶段
+    if hasattr(target_stage, "enabled"):
+        target_stage.enabled = enabled
+        logger.debug(f"更新阶段 {stage_name} 的启用状态为: {enabled}")
+
+    if enabled:
+        # 启用阶段时，自动启用所有前置阶段
+        logger.debug(f"启用阶段 {stage_name}，检查前置依赖...")
+        deps = get_stage_dependencies(stage_name)
+
+        for dep_name in deps:
+            # 查找依赖阶段
+            dep_stage = None
+            for stage in stages:
+                if hasattr(stage, "name") and stage.name == dep_name:
+                    dep_stage = stage
+                    break
+
+            if dep_stage and hasattr(dep_stage, "enabled"):
+                if not dep_stage.enabled:
+                    # 递归启用前置阶段
+                    logger.debug(f"自动启用前置阶段: {dep_name}")
+                    adjust_stage_dependencies(stages, dep_name, True)
+                else:
+                    logger.debug(f"前置阶段 {dep_name} 已启用")
+    else:
+        # 禁用阶段时，自动禁用所有后置阶段
+        logger.debug(f"禁用阶段 {stage_name}，检查后置依赖...")
+        dependents = get_dependent_stages(stage_name)
+
+        for dep_name in dependents:
+            # 查找后置依赖阶段
+            dep_stage = None
+            for stage in stages:
+                if hasattr(stage, "name") and stage.name == dep_name:
+                    dep_stage = stage
+                    break
+
+            if dep_stage and hasattr(dep_stage, "enabled"):
+                if dep_stage.enabled:
+                    # 递归禁用后置阶段
+                    logger.debug(f"自动禁用后置阶段: {dep_name}")
+                    adjust_stage_dependencies(stages, dep_name, False)
+                else:
+                    logger.debug(f"后置阶段 {dep_name} 已禁用")
 
 
 def execute_workflow(

@@ -609,3 +609,92 @@ def _check_circular_dependencies(stages: list[dict]) -> bool:
             return True
 
     return False
+
+
+# =============================================================================
+# Story 2.14: 启用/禁用工作流阶段 - 配置验证
+# =============================================================================
+
+def validate_workflow_config(stages: list) -> list[str]:
+    """验证工作流配置的 enabled 字段和依赖关系 (Story 2.14 - 任务 4)
+
+    验证每个阶段的 enabled 字段为布尔值，并验证依赖关系的完整性。
+
+    Args:
+        stages: 阶段配置列表（StageConfig 对象列表）
+
+    Returns:
+        验证错误列表，空列表表示配置有效
+
+    Examples:
+        >>> # 有效配置
+        >>> stages = [StageConfig(name="matlab_gen", enabled=True), ...]
+        >>> errors = validate_workflow_config(stages)
+        >>> errors == []
+
+        >>> # 无效的 enabled 字段
+        >>> stages = [StageConfig(name="matlab_gen", enabled="true"), ...]
+        >>> errors = validate_workflow_config(stages)
+        >>> len(errors) > 0
+    """
+    errors = []
+
+    # 动态导入以避免循环依赖
+    try:
+        from core.workflow import get_stage_dependencies
+    except ImportError:
+        logger.error("无法导入 get_stage_dependencies")
+        return ["无法加载依赖关系验证函数"]
+
+    # 验证每个阶段的 enabled 字段（任务 4.2）
+    for i, stage in enumerate(stages):
+        if not hasattr(stage, "name"):
+            errors.append(f"阶段 {i} 缺少 name 字段")
+            continue
+
+        stage_name = getattr(stage, "name", f"阶段 {i}")
+
+        # 验证 enabled 字段存在且为布尔值
+        if not hasattr(stage, "enabled"):
+            errors.append(f"阶段 '{stage_name}' 缺少 enabled 字段")
+            continue
+
+        enabled = getattr(stage, "enabled")
+        if not isinstance(enabled, bool):
+            errors.append(f"阶段 '{stage_name}' 的 enabled 字段必须是布尔值，当前为 {type(enabled).__name__}")
+
+    # 验证依赖关系的完整性（任务 4.3）
+    # 检查启用阶段的依赖是否也被启用
+    enabled_stages = {}
+    for stage in stages:
+        if hasattr(stage, "name") and hasattr(stage, "enabled"):
+            enabled_stages[stage.name] = stage.enabled
+
+    for stage in stages:
+        if not hasattr(stage, "name") or not hasattr(stage, "enabled"):
+            continue
+
+        stage_name = stage.name
+
+        # 只检查启用的阶段
+        if not stage.enabled:
+            continue
+
+        # 获取前置依赖
+        try:
+            dependencies = get_stage_dependencies(stage_name)
+        except Exception as e:
+            logger.warning(f"获取阶段 '{stage_name}' 的依赖失败: {e}")
+            continue
+
+        # 检查每个依赖是否也被启用
+        for dep_name in dependencies:
+            if dep_name in enabled_stages:
+                if not enabled_stages[dep_name]:
+                    errors.append(
+                        f"阶段 '{stage_name}' 已启用，但其依赖阶段 '{dep_name}' 未启用"
+                    )
+            else:
+                logger.warning(f"阶段 '{stage_name}' 依赖未知的阶段 '{dep_name}'")
+
+    return errors
