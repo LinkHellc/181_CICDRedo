@@ -29,6 +29,10 @@ class StageBase(ABC):
     - 返回 StageResult 对象
     - 支持取消检查
 
+    Story 2.15 - 任务 2:
+    - 添加取消检查逻辑
+    - 添加 _check_cancelled() 辅助方法
+
     Attributes:
         name: 阶段名称
         timeout: 超时时间（秒）
@@ -59,10 +63,27 @@ class StageBase(ABC):
         """
         pass
 
+    def _check_cancelled(self, context: BuildContext) -> bool:
+        """检查是否已取消 (Story 2.15 - 任务 2.3, 2.6)
+
+        Args:
+            context: 构建上下文
+
+        Returns:
+            bool: 如果已取消返回 True，否则返回 False
+        """
+        if context.is_cancelled:
+            logger.debug(f"阶段已取消: {self.name}")
+            return True
+        return False
+
     def validate_preconditions(self, config: StageConfig, context: BuildContext) -> Optional[str]:
         """验证执行前条件
 
         子类可以重写此方法以添加自定义验证。
+
+        Story 2.15 - 任务 2.2:
+        - 在开始处添加取消检查
 
         Args:
             config: 阶段配置
@@ -71,6 +92,10 @@ class StageBase(ABC):
         Returns:
             None 如果验证通过，否则返回错误消息
         """
+        # 检查是否已取消 (任务 2.2)
+        if self._check_cancelled(context):
+            return None  # 返回 None 表示通过，实际在 execute 中处理
+
         return None
 
 
@@ -88,6 +113,11 @@ def execute_stage(
     - 返回 StageResult 对象
     - 记录执行日志
 
+    Story 2.15 - 任务 2:
+    - 添加取消检查逻辑 (任务 2.2, 2.4)
+    - 在开始处检查取消标志 (任务 2.4)
+    - 如果取消返回 StageResult.cancelled() (任务 2.4)
+
     Args:
         config: 阶段配置
         context: 构建上下文
@@ -97,12 +127,25 @@ def execute_stage(
         StageResult: 阶段执行结果
     """
     stage_name = config.name
+
+    # 检查是否已取消 (任务 2.2, 2.4)
+    if context.is_cancelled:
+        logger.info(f"阶段已取消: {stage_name}")
+        context.log(f"阶段已取消: {stage_name}")
+        return StageResult.cancelled()
+
     context.log(f"开始执行阶段: {stage_name}")
 
     # 如果没有提供实现，返回占位结果
     # 后续 Story 会实现具体阶段
     if stage_impl is None:
         context.log(f"阶段 {stage_name} 尚未实现（占位实现）")
+
+        # 操作后再次检查取消 (任务 2.5)
+        if context.is_cancelled:
+            logger.info(f"阶段已取消: {stage_name}")
+            return StageResult.cancelled()
+
         return StageResult(
             status=StageStatus.COMPLETED,
             message=f"阶段 {stage_name} 执行成功 (占位实现)"
@@ -121,6 +164,11 @@ def execute_stage(
 
         # 执行阶段
         result = stage_impl.execute(config, context)
+
+        # 操作后检查取消 (任务 2.5)
+        if context.is_cancelled:
+            logger.info(f"阶段已取消: {stage_name}")
+            return StageResult.cancelled()
 
         context.log(f"阶段 {stage_name} 完成: {result.status.value}")
         return result

@@ -36,6 +36,11 @@ class WorkflowThread(QThread):
     - 使用 QThread + pyqtSignal 实现线程通信
     - 跨线程信号使用 QueuedConnection（在连接时设置）
 
+    Story 2.15 - 任务 3, 8, 9:
+    - 添加取消机制
+    - 添加 build_cancelled 信号
+    - 添加资源清理方法
+
     Signals (Story 2.4 Task 2.3):
         progress_update(int, str): 进度百分比, 消息
         stage_started(str): 阶段名称
@@ -43,6 +48,9 @@ class WorkflowThread(QThread):
         log_message(str): 日志内容
         error_occurred(str, list): 错误消息, 建议列表
         build_finished(BuildState): 构建最终状态
+
+    Signals (Story 2.15 - 任务 9):
+        build_cancelled(str, str): 构建取消信号 (阶段名称, 消息)
     """
 
     # 定义信号 (Story 2.4 Task 2.3)
@@ -52,6 +60,9 @@ class WorkflowThread(QThread):
     log_message = pyqtSignal(str)  # 日志内容
     error_occurred = pyqtSignal(str, list)  # 错误消息, 建议列表
     build_finished = pyqtSignal(BuildState)  # 构建最终状态
+
+    # 定义取消信号 (Story 2.15 - 任务 9.1)
+    build_cancelled = pyqtSignal(str, str)  # 阶段名称, 消息
 
     def __init__(self, project_config: ProjectConfig, workflow_config: WorkflowConfig, parent: Optional[QObject] = None):
         """初始化工作流线程
@@ -73,6 +84,9 @@ class WorkflowThread(QThread):
             state=BuildState.IDLE
         )
 
+        # 构建上下文 (Story 2.15 - 任务 3.3)
+        self._context = BuildContext()
+
         logger.info(f"工作流线程初始化: 项目={project_config.name}, 工作流={workflow_config.name}")
 
     def run(self) -> None:
@@ -83,6 +97,10 @@ class WorkflowThread(QThread):
         Architecture Decision 2.1:
         - 使用 time.monotonic() 记录时间
         - 支持中断检测
+
+        Story 2.15 - 任务 3.5, 3.6:
+        - 定期检查 isInterruptionRequested()
+        - 检测到取消时设置 context.is_cancelled = True
         """
         try:
             # 记录开始时间 (Story 2.4 Task 6.1)
@@ -102,12 +120,14 @@ class WorkflowThread(QThread):
             self._build_execution.duration = elapsed
 
             # 确定最终状态
-            if self.isInterruptionRequested():
+            if self.isInterruptionRequested() or self._context.is_cancelled:
                 final_state = BuildState.CANCELLED
                 self._build_execution.state = BuildState.CANCELLED
                 self._build_execution.error_message = "构建被用户取消"
                 logger.info("工作流已取消")
                 self.log_message.emit("工作流已被用户取消")
+                # 执行清理 (Story 2.15 - 任务 8)
+                self._cleanup_on_cancel()
             elif success:
                 final_state = BuildState.COMPLETED
                 self._build_execution.state = BuildState.COMPLETED
@@ -135,6 +155,10 @@ class WorkflowThread(QThread):
 
         按顺序执行工作流中所有启用的阶段。
 
+        Story 2.15 - 任务 3.5, 3.6:
+        - 定期检查 isInterruptionRequested()
+        - 检测到取消时设置 context.is_cancelled = True
+
         Returns:
             bool: 是否全部成功
         """
@@ -155,7 +179,7 @@ class WorkflowThread(QThread):
         logger.info(f"工作流包含 {total_stages} 个启用阶段")
 
         # 初始化构建上下文
-        context = BuildContext(
+        self._context = BuildContext(
             config=self.project_config.to_dict(),
             state={
                 "build_start_time": self._build_execution.start_time
@@ -165,8 +189,10 @@ class WorkflowThread(QThread):
 
         # 执行每个阶段
         for i, stage_config in enumerate(enabled_stages):
-            # 检查中断标志 (Story 2.4 Task 7.4)
+            # 检查中断标志 (Story 2.4 Task 7.4, Story 2.15 - 任务 3.5)
             if self.isInterruptionRequested():
+                # 设置取消标志 (Story 2.15 - 任务 3.6)
+                self._context.is_cancelled = True
                 logger.info("检测到中断请求，停止工作流执行")
                 self.log_message.emit("正在取消构建...")
                 return False
@@ -193,7 +219,7 @@ class WorkflowThread(QThread):
             logger.info(f"开始执行阶段 {i+1}/{total_stages}: {stage_name}")
 
             # 执行阶段
-            result = self._execute_stage(stage_config, context)
+            result = self._execute_stage(stage_config, self._context)
 
             # 记录阶段结束信息
             stage_execution.end_time = time.monotonic()
@@ -215,7 +241,7 @@ class WorkflowThread(QThread):
             success = (result.status.value == "completed")
             self.stage_complete.emit(stage_name, success)
 
-            # 检查阶段是否失败
+            # 检查阶段是否失败或取消
             if result.status.value == "failed":
                 error_msg = f"阶段 {stage_name} 失败: {result.message}"
                 logger.error(error_msg)
@@ -228,6 +254,10 @@ class WorkflowThread(QThread):
                     result.suggestions or ["检查日志获取详细信息"]
                 )
 
+                return False
+            elif result.status.value == "cancelled":
+                logger.info(f"阶段 {stage_name} 已取消")
+                self.log_message.emit(f"阶段 {stage_name} 已取消")
                 return False
 
         # 所有阶段完成，更新进度到 100%
@@ -292,3 +322,31 @@ class WorkflowThread(QThread):
             BuildExecution: 构建执行信息
         """
         return self._build_execution
+
+    def request_cancel(self):
+        """请求取消构建 (Story 2.15 - 任务 3.2, 3.3)"""
+        # 设置取消请求标志 (任务 3.3)
+        self._context.cancel_requested = True
+
+        # 调用 QThread 中断机制 (任务 3.4)
+        self.requestInterruption()
+
+        logger.info("请求取消构建")
+
+    def _cleanup_on_cancel(self):
+        """取消时清理资源 (Story 2.15 - 任务 8.1, 8.2, 8.3, 8.4)"""
+        stage_name = self._build_execution.current_stage or "未知阶段"
+
+        # 终止进程 (任务 8.2)
+        process_count = self._context.terminate_processes()
+        logger.info(f"取消时终止 {process_count} 个进程")
+        self.log_message.emit(f"取消时终止 {process_count} 个进程")
+
+        # 清理临时文件 (任务 8.3)
+        file_count = self._context.cleanup_temp_files()
+        logger.info(f"取消时清理 {file_count} 个临时文件")
+        self.log_message.emit(f"取消时清理 {file_count} 个临时文件")
+
+        # 发送取消信号 (任务 8.4)
+        self.build_cancelled.emit(stage_name, "构建已取消")
+        logger.info(f"发送取消信号: {stage_name}")

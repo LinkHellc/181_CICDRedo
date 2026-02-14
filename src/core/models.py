@@ -5,8 +5,10 @@ following Architecture Decision 1.2 (Lightweight Data Containers).
 """
 
 import dataclasses
+import subprocess
+import time
 from dataclasses import dataclass, fields
-from typing import Optional, List
+from typing import Optional, List, Dict, Callable
 from enum import Enum
 
 # 创建默认字段对象（在类外部创建，避免Python 3.11的bug）
@@ -318,6 +320,9 @@ class StageResult:
     - 支持序列化/反序列化
     - 使用 field(default_factory=...) 避免可变默认值陷阱
 
+    Story 2.15 - 任务 14:
+    - 添加 cancelled() 类方法创建取消结果
+
     Attributes:
         status: 执行状态
         message: 状态消息
@@ -367,6 +372,18 @@ class StageResult:
 
         return cls(**filtered_data)
 
+    @classmethod
+    def cancelled(cls, message: str = "已取消") -> "StageResult":
+        """创建已取消结果 (Story 2.15 - 任务 14.2)
+
+        Args:
+            message: 取消消息
+
+        Returns:
+            StageResult: 已取消的结果对象
+        """
+        return cls(status=StageStatus.CANCELLED, message=message)
+
 
 @dataclass
 class BuildContext:
@@ -382,16 +399,40 @@ class BuildContext:
     Story 2.5 - 任务 6.5:
     - signal_emit: 信号发送回调（用于发送阶段完成时间和时长到 UI）
 
+    Story 2.15 - 任务 1, 4, 7, 15:
+    - 取消标志：is_cancelled, cancel_requested
+    - 进程管理：active_processes
+    - 临时文件：temp_files
+    - 超时检测：last_activity_time
+
     Attributes:
         config: 全局配置字典（只读）
         state: 阶段间传递的状态字典（可写）
         log_callback: 日志回调函数
         signal_emit: 信号发送回调函数（可选）
+        is_cancelled: 是否已取消
+        cancel_requested: 是否请求取消
+        active_processes: 活跃进程字典
+        temp_files: 临时文件列表
+        last_activity_time: 最后活动时间（用于超时检测）
     """
     config: dict = dataclasses.field(default_factory=dict)
     state: dict = dataclasses.field(default_factory=dict)
-    log_callback: Optional[callable] = None
-    signal_emit: Optional[callable] = None
+    log_callback: Optional[Callable[[str], None]] = None
+    signal_emit: Optional[Callable[[str, ...], None]] = None
+
+    # Story 2.15 - 任务 1: 取消标志
+    is_cancelled: bool = False
+    cancel_requested: bool = False
+
+    # Story 2.15 - 任务 4: 进程管理
+    active_processes: Dict[str, subprocess.Popen] = dataclasses.field(default_factory=dict)
+
+    # Story 2.15 - 任务 7: 临时文件
+    temp_files: List[str] = dataclasses.field(default_factory=list)
+
+    # Story 2.15 - 任务 15: 超时检测
+    last_activity_time: float = dataclasses.field(default_factory=time.monotonic)
 
     def log(self, message: str):
         """记录日志
@@ -415,6 +456,111 @@ class BuildContext:
         """
         if self.signal_emit:
             self.signal_emit(signal_name, *args, **kwargs)
+
+    # Story 2.15 - 任务 4: 进程管理方法
+    def register_process(self, name: str, process: subprocess.Popen):
+        """注册活跃进程 (Story 2.15 - 任务 4.3)
+
+        Args:
+            name: 进程名称
+            process: 进程对象
+        """
+        self.active_processes[name] = process
+        self.log(f"注册进程: {name}")
+
+    def terminate_processes(self) -> int:
+        """终止所有活跃进程 (Story 2.15 - 任务 4.4, 4.5, 4.6)
+
+        Returns:
+            int: 终止的进程数量
+        """
+        terminated_count = 0
+        for name, process in self.active_processes.items():
+            try:
+                process.terminate()
+                self.log(f"终止进程: {name}")
+                terminated_count += 1
+
+                # 等待进程结束（最多 5 秒）
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # 如果 terminate 失败，使用 kill
+                    process.kill()
+                    self.log(f"强制终止进程: {name}")
+            except Exception as e:
+                self.log(f"终止进程失败 {name}: {e}")
+
+        self.active_processes.clear()
+        return terminated_count
+
+    # Story 2.15 - 任务 7: 临时文件管理方法
+    def register_temp_file(self, file_path: str):
+        """注册临时文件 (Story 2.15 - 任务 7.3)
+
+        Args:
+            file_path: 文件路径
+        """
+        self.temp_files.append(file_path)
+        self.log(f"注册临时文件: {file_path}")
+
+    def cleanup_temp_files(self) -> int:
+        """清理所有临时文件 (Story 2.15 - 任务 7.4, 7.5, 7.6)
+
+        Returns:
+            int: 清理的文件数量
+        """
+        import os
+        cleaned_count = 0
+        for file_path in self.temp_files:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    self.log(f"清理临时文件: {file_path}")
+                    cleaned_count += 1
+            except Exception as e:
+                self.log(f"清理临时文件失败 {file_path}: {e}")
+
+        self.temp_files.clear()
+        return cleaned_count
+
+    # Story 2.15 - 任务 15: 超时检测方法
+    def is_timeout(self, timeout_seconds: int) -> bool:
+        """检查是否超时 (Story 2.15 - 任务 15.3, 15.4)
+
+        Args:
+            timeout_seconds: 超时时间（秒）
+
+        Returns:
+            bool: 是否超时
+        """
+        elapsed = time.monotonic() - self.last_activity_time
+        return elapsed > timeout_seconds
+
+    def update_activity_time(self):
+        """更新活动时间 (Story 2.15 - 任务 15.2)"""
+        self.last_activity_time = time.monotonic()
+
+    def get(self, key: str, default=None):
+        """从状态中获取值
+
+        Args:
+            key: 键名
+            default: 默认值
+
+        Returns:
+            状态值
+        """
+        return self.state.get(key, default)
+
+    def set(self, key: str, value):
+        """设置状态值
+
+        Args:
+            key: 键名
+            value: 值
+        """
+        self.state[key] = value
 
 
 @dataclass

@@ -65,7 +65,7 @@ development_status:
   2-11-create-timestamp-target-folder: done
   2-12-move-hex-a2l-files-target-folder: backlog
   2-13-detect-manage-matlab-process-state: backlog
-  2-14-enable-disable-workflow-stages: backlog
+  2-14-enable-disable-workflow-stages: done
   2-15-cancel-ongoing-build: backlog
   epic-2-retrospective: optional
 
