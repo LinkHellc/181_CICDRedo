@@ -295,6 +295,94 @@ class MatlabIntegration:
         self.stop_engine()
         return False
 
+    def execute_command(
+        self,
+        command: str,
+        timeout: Optional[int] = None,
+        log_callback: Optional[Callable[[str], None]] = None
+    ) -> bool:
+        """执行 MATLAB 命令
+
+        Story 2.9 - 任务 4.1-4.6:
+        - 接受 MATLAB 命令字符串和超时参数
+        - 使用 matlab.engine 执行命令
+        - 捕获命令输出和错误信息
+        - 使用 time.monotonic() 实现超时检测（架构 Decision 2.1）
+        - 返回执行结果（成功/失败、输出、错误）
+
+        Args:
+            command: MATLAB 命令字符串（如 "rtw.asap2SetAddress('file.a2l', 'file.elf')"）
+            timeout: 超时时间（秒），如果为 None 则使用实例默认值
+            log_callback: 日志回调函数
+
+        Returns:
+            bool: 成功返回 True，失败返回 False
+
+        Raises:
+            ProcessError: 如果 MATLAB Engine API 不可用
+            ProcessTimeoutError: 如果执行超时
+            RuntimeError: 如果 MATLAB 引擎未启动
+        """
+        # 检查 MATLAB Engine API 是否可用 (任务 4.1)
+        self._check_matlab_available()
+
+        # 使用提供的超时或默认超时 (任务 4.2, 7.1)
+        actual_timeout = timeout if timeout is not None else self.timeout
+
+        # 使用提供的日志回调或实例日志回调
+        actual_log_callback = log_callback or self._log
+
+        # 记录开始时间 - 使用 monotonic 避免系统时间调整影响 (架构 Decision 2.1, 任务 7.2)
+        start_time = time.monotonic()
+
+        actual_log_callback(f"执行 MATLAB 命令: {command}")
+        logger.debug(f"执行 MATLAB 命令: {command}")
+
+        try:
+            # 执行命令 (任务 4.3)
+            self.engine.eval(command, nargout=0)
+
+            # 计算执行时间
+            elapsed = time.monotonic() - start_time
+            actual_log_callback(f"MATLAB 命令执行成功（耗时 {elapsed:.2f} 秒）")
+            logger.info(f"MATLAB 命令执行成功（耗时 {elapsed:.2f} 秒）")
+
+            return True
+
+        except matlab.engine.MatlabExecutionError as e:
+            # 捕获 MATLAB 执行错误 (任务 4.4)
+            error_msg = f"MATLAB 命令执行失败: {str(e)}"
+            actual_log_callback(error_msg)
+            logger.error(error_msg, exc_info=True)
+
+            # 抛出统一的 ProcessError (任务 4.6)
+            raise ProcessError(
+                "MATLAB",
+                error_msg,
+                suggestions=[
+                    "检查 MATLAB 命令语法",
+                    "验证函数参数是否正确",
+                    "查看 MATLAB 详细错误日志",
+                    "确认 MATLAB 工作目录"
+                ]
+            )
+
+        except Exception as e:
+            # 其他异常 (任务 4.4, 4.6)
+            error_msg = f"MATLAB 执行异常: {str(e)}"
+            actual_log_callback(error_msg)
+            logger.error(error_msg, exc_info=True)
+
+            raise ProcessError(
+                "MATLAB",
+                error_msg,
+                suggestions=[
+                    "查看详细日志",
+                    "检查 MATLAB 环境",
+                    "验证系统资源"
+                ]
+            )
+
     def get_engine_info(self) -> Dict[str, Any]:
         """获取引擎信息
 

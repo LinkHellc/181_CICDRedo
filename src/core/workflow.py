@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # 默认超时值（秒）
 DEFAULT_TIMEOUT = 300
 
-# 阶段执行器映射 (Story 2.5 - 任务 8, Story 2.7 - 任务 6, Story 2.8 - 任务 5)
+# 阶段执行器映射 (Story 2.5 - 任务 8, Story 2.7 - 任务 6, Story 2.8 - 任务 5, Story 2.9 - 任务 9)
 # 映射阶段名称到对应的执行函数
 STAGE_EXECUTORS: Dict[str, Callable] = {
     # Story 2.5: MATLAB 代码生成阶段
@@ -41,8 +41,9 @@ STAGE_EXECUTORS: Dict[str, Callable] = {
     "file_move": lambda config, context: _execute_file_move(config, context),
     # Story 2.8: IAR 编译阶段
     "iar_compile": lambda config, context: _execute_iar_compile(config, context),
-    # 后续 Story (2.9-2.12) 会逐步实现
-    # "a2l_process": stages.a2l_process.execute_stage,
+    # Story 2.9: A2L 处理阶段
+    "a2l_process": lambda config, context: _execute_a2l_process(config, context),
+    # 后续 Story (2.10-2.12) 会逐步实现
     # "package": stages.package.execute_stage,
 }
 
@@ -161,6 +162,36 @@ def _execute_matlab_gen(config, context) -> StageResult:
             message=f"MATLAB 代码生成模块未实现",
             error=e,
             suggestions=["确保 Story 2.5 已正确实现"]
+        )
+
+
+def _execute_a2l_process(config, context) -> StageResult:
+    """执行 A2L 处理阶段（内部包装函数）
+
+    Story 2.9 - 任务 9.1-9.4:
+    - 在 STAGE_EXECUTORS 中注册 a2l_process
+    - 指向 stages.a2l_process.execute_stage
+    - 确保阶段按工作流顺序执行（iar_compile → a2l_process）
+    - 测试工作流集成
+
+    Args:
+        config: 阶段配置
+        context: 构建上下文
+
+    Returns:
+        StageResult: 阶段执行结果
+    """
+    try:
+        # 动态导入以避免循环依赖
+        from stages.a2l_process import execute_stage
+        return execute_stage(config, context)
+    except ImportError as e:
+        logger.error(f"无法导入 a2l_process 模块: {e}")
+        return StageResult(
+            status=StageStatus.FAILED,
+            message=f"A2L 处理模块未实现",
+            error=e,
+            suggestions=["确保 Story 2.9 已正确实现"]
         )
 
 # 阶段依赖规则（Story 2.3 Task 2.2, Story 2.7 任务 6.3, Story 2.8 任务 5.3）
