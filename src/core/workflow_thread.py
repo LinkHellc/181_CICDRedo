@@ -354,7 +354,7 @@ class WorkflowThread(QThread):
             self.log_message.emit(f"阶段 {stage_name} 尚未实现（占位实现）")
 
             return StageResult(
-                status=StageResult.__annotations__["status"].__class__.COMPLETED,
+                status=StageStatus.COMPLETED,
                 message=f"阶段 {stage_name} 执行成功 (占位实现)"
             )
 
@@ -368,7 +368,7 @@ class WorkflowThread(QThread):
             if not isinstance(result, StageResult):
                 logger.warning(f"阶段 {stage_name} 返回的不是 StageResult，转换为默认值")
                 result = StageResult(
-                    status=StageResult.__annotations__["status"].__class__.COMPLETED,
+                    status=StageStatus.COMPLETED,
                     message=f"阶段 {stage_name} 完成"
                 )
 
@@ -377,7 +377,7 @@ class WorkflowThread(QThread):
         except Exception as e:
             logger.exception(f"阶段 {stage_name} 执行异常: {e}")
             return StageResult(
-                status=StageResult.__annotations__["status"].__class__.FAILED,
+                status=StageStatus.FAILED,
                 message=f"阶段 {stage_name} 执行异常: {str(e)}",
                 error=e,
                 suggestions=["检查阶段配置", "查看日志获取详细信息"]
