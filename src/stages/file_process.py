@@ -476,6 +476,11 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
     - 记录处理日志
     - 将处理后的文件列表保存到 context.state["processed_files"]
 
+    Story 2.15 - 任务 4.7-4.9:
+    - 添加取消标志检查
+    - 在文件操作中定期检查取消标志
+    - 检测到取消时返回 CANCELLED 状态
+
     Args:
         config: 阶段配置
         context: 构建上下文
@@ -485,6 +490,11 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
     """
     stage_name = "file_process"
     context.log(f"=== 开始执行阶段: {stage_name} ===")
+
+    # 检查取消标志 (Story 2.15 - 任务 4.7)
+    if context.cancel_requested or context.is_cancelled:
+        context.log(f"阶段 {stage_name} 已取消")
+        return StageResult.cancelled(f"阶段 {stage_name} 已取消")
 
     # 记录开始时间
     start_time = time.monotonic()
@@ -534,6 +544,11 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
             )
 
         context.log(f"找到 {len(source_files)} 个源文件")
+
+        # 检查取消标志 (Story 2.15 - 任务 4.8)
+        if context.cancel_requested or context.is_cancelled:
+            context.log(f"阶段 {stage_name} 已取消")
+            return StageResult.cancelled(f"阶段 {stage_name} 已取消")
 
         # 处理 Cal.c 文件 (Story 2.6 - 任务 5.4)
         cal_file = find_cal_file(source_files)

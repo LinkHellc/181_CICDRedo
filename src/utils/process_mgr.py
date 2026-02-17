@@ -8,10 +8,16 @@ Story 2.13 - 任务 14: 实现进程监控和超时处理
 - 检测进程内存占用
 - 实现进程僵死检测
 - 添加超时后强制终止逻辑
+
+Story 2.15 - 任务 3: 创建进程终止工具函数
+- 实现 terminate_process() 函数
+- 支持优雅终止和强制终止
+- 支持进程树清理
 """
 
 import logging
 import time
+import subprocess
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 
@@ -323,3 +329,185 @@ def monitor_matlab_process(
 
     logger.info(f"创建 MATLAB 进程监控器: PID={pid}")
     return monitor
+
+
+# =============================================================================
+# Story 2.15: 进程终止工具函数
+# =============================================================================
+
+def terminate_process(
+    proc: subprocess.Popen,
+    timeout: int = 5,
+    force: bool = False
+) -> tuple:
+    """终止进程（优雅终止 + 强制终止）
+
+    Story 2.15 - 任务 3.1-3.6:
+    - 接受 subprocess.Popen 对象和超时参数
+    - 尝试优雅终止（proc.terminate()）
+    - 等待进程退出（最多超时秒数）
+    - 如果未退出，强制终止（proc.kill()）
+    - 使用 psutil 确保进程树清理（子进程）
+
+    Story 2.15 - 任务 14.1-14.3:
+    - 处理进程终止失败的情况
+    - 记录无法终止的进程 PID
+    - 提供手动终止的建议
+
+    Architecture Decision 2.1:
+    - 使用 terminate() + 等待 + kill() 模式
+    - 确保僵尸进程清理
+
+    Args:
+        proc: subprocess.Popen 对象
+        timeout: 优雅终止超时时间（秒），默认 5 秒
+        force: 是否跳过优雅终止直接强制终止（默认 False）
+
+    Returns:
+        tuple: (成功标志, 建议列表)
+            - 成功标志: bool, True 表示成功终止
+            - 建议列表: list, 错误时提供恢复建议
+
+    Examples:
+        >>> import subprocess
+        >>> proc = subprocess.Popen(["sleep", "10"])
+        >>> success, suggestions = terminate_process(proc, timeout=5)
+        >>> assert success is True
+        >>> assert proc.poll() is not None
+    """
+    suggestions = []
+
+    try:
+        # 检查进程是否已退出 (Task 3.2)
+        if proc.poll() is not None:
+            logger.info(f"进程 PID: {proc.pid} 已退出")
+            return True, []
+
+        # 如果 force=True，直接强制终止
+        if force:
+            logger.info(f"直接强制终止进程 PID: {proc.pid}")
+            proc.kill()
+
+            try:
+                proc.wait(timeout=2)
+                logger.info(f"进程 PID: {proc.pid} 已强制终止")
+                return True, []
+            except subprocess.TimeoutExpired:
+                logger.error(f"进程 PID: {proc.pid} 强制终止超时")
+                # 任务 14.2: 记录无法终止的进程 PID
+                suggestions.append(
+                    f"请手动在任务管理器中终止进程 PID: {proc.pid}"
+                )
+                suggestions.append("如果进程仍然存在，尝试重启计算机")
+                # 继续尝试清理进程树
+                _cleanup_process_tree(proc.pid)
+                return False, suggestions
+
+        # 优雅终止 (Task 3.3)
+        logger.info(f"尝试优雅终止进程 PID: {proc.pid}")
+        proc.terminate()
+
+        # 等待进程退出 (Task 3.4)
+        try:
+            proc.wait(timeout=timeout)
+            logger.info(f"进程 PID: {proc.pid} 已优雅终止")
+            return True, []
+        except subprocess.TimeoutExpired:
+            # 优雅终止超时，强制终止 (Task 3.5)
+            logger.warning(
+                f"进程 PID: {proc.pid} 优雅终止超时（{timeout}秒），尝试强制终止"
+            )
+            proc.kill()
+
+            try:
+                proc.wait(timeout=2)
+                logger.info(f"进程 PID: {proc.pid} 已强制终止")
+                return True, []
+            except subprocess.TimeoutExpired:
+                logger.error(f"进程 PID: {proc.pid} 强制终止失败")
+                # 任务 14.2, 14.3: 记录无法终止的进程 PID，提供手动终止建议
+                suggestions.append(
+                    f"请手动在任务管理器中终止进程 PID: {proc.pid}"
+                )
+                suggestions.append("如果进程仍然存在，尝试重启计算机")
+                # 继续尝试清理进程树
+                _cleanup_process_tree(proc.pid)
+                return False, suggestions
+
+        # 清理进程树 (Task 3.6)
+        _cleanup_process_tree(proc.pid)
+
+        return True, []
+
+    except psutil.AccessDenied as e:
+        # 任务 14.1: 处理进程终止失败的情况（权限不足）
+        error_msg = f"无权限终止进程 PID: {proc.pid}"
+        logger.error(error_msg)
+        suggestions.append(f"请以管理员身份运行程序")
+        suggestions.append(f"请手动在任务管理器中终止进程 PID: {proc.pid}")
+        return False, suggestions
+
+    except Exception as e:
+        logger.error(f"终止进程失败 PID: {getattr(proc, 'pid', 'unknown')} - {e}")
+        suggestions.append(f"错误: {str(e)}")
+        suggestions.append("请查看日志获取详细信息")
+        return False, suggestions
+
+
+def _cleanup_process_tree(pid: int) -> bool:
+    """清理进程树（包括所有子进程）
+
+    Story 2.15 - 任务 3.6:
+    - 使用 psutil 确保进程树清理
+    - 递归终止所有子进程
+
+    Args:
+        pid: 进程 PID
+
+    Returns:
+        bool: 清理成功返回 True
+    """
+    if not PSUTIL_AVAILABLE:
+        logger.warning("psutil 不可用，无法清理进程树")
+        return False
+
+    try:
+        parent = psutil.Process(pid)
+        children = parent.children(recursive=True)
+
+        if not children:
+            # 没有子进程
+            return True
+
+        logger.info(f"清理进程树: PID={pid}, 子进程数={len(children)}")
+
+        # 终止所有子进程
+        for child in children:
+            try:
+                logger.debug(f"终止子进程 PID: {child.pid}")
+                child.kill()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied:
+                logger.warning(f"无权限终止子进程 PID: {child.pid}")
+                continue
+
+        # 等待子进程退出
+        psutil.wait_procs(children, timeout=2)
+
+        logger.info(f"进程树清理完成: PID={pid}")
+        return True
+
+    except psutil.NoSuchProcess:
+        # 进程已不存在
+        logger.info(f"进程 PID: {pid} 已不存在")
+        return True
+
+    except psutil.AccessDenied:
+        logger.error(f"无权限访问进程 PID: {pid}")
+        return False
+
+    except Exception as e:
+        logger.error(f"清理进程树失败 PID: {pid} - {e}")
+        return False
+

@@ -337,6 +337,39 @@ class ProgressPanel(QWidget):
         self.time_label.setText("已用时间: 00:00:00 | 预计剩余: --:--:--")
         logger.debug("进度面板已清空")
 
+    def show_cancelled_state(self):
+        """显示取消状态 (Story 2.15 - 任务 10.5, 任务 12.1-12.6)
+
+        更新进度面板显示构建已取消的状态。
+        """
+        # 更新当前阶段标签 (任务 12.3)
+        self.current_stage_label.setText("❌ 构建已取消")
+        self.current_stage_label.setStyleSheet(
+            "font-weight: bold; font-size: 14px; color: orange; padding: 8px;"
+        )
+
+        # 更新所有阶段状态为 CANCELLED (任务 12.1, 12.2)
+        for row in range(self.stage_list.rowCount()):
+            stage_name_item = self.stage_list.item(row, 0)
+            if stage_name_item:
+                stage_name = stage_name_item.text()
+
+                # 更新状态文本 (任务 12.3)
+                status_text = self._get_stage_status_text(StageStatus.CANCELLED)
+                status_item = self.stage_list.item(row, 1)
+                if status_item:
+                    status_item.setText(status_text)
+
+                    # 应用颜色 (任务 12.4)
+                    color = self._get_stage_color(StageStatus.CANCELLED)
+                    status_item.setForeground(QColor(color))
+
+        # 更新时间显示：显示取消时的已用时间 (任务 12.5)
+        elapsed_text = format_duration(self.current_progress.elapsed_time)
+        self.time_label.setText(f"已用时间: {elapsed_text} | 构建已取消")
+
+        logger.debug("进度面板已显示取消状态")
+
     def get_average_update_interval(self) -> float:
         """获取平均更新间隔 (任务 12.2, 12.3)
 

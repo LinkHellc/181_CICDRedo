@@ -343,10 +343,22 @@ class WorkflowThread(QThread):
 
         Returns:
             StageResult: 阶段执行结果
+
+        Story 2.15 - 任务 2.4:
+        - 在阶段执行前检查取消标志
+        - 检测到取消时返回 CANCELLED 结果
         """
         from core.workflow import STAGE_EXECUTORS  # 动态导入避免循环依赖
 
         stage_name = stage_config.name
+
+        # 检查取消标志 (Story 2.15 - 任务 2.4)
+        if self.isInterruptionRequested() or context.is_cancelled:
+            logger.info(f"检测到取消请求，停止阶段 {stage_name}")
+            return StageResult(
+                status=StageStatus.CANCELLED,
+                message=f"阶段 {stage_name} 已取消"
+            )
 
         # 检查是否有对应的执行器
         if stage_name not in STAGE_EXECUTORS:
@@ -363,6 +375,14 @@ class WorkflowThread(QThread):
 
         try:
             result = executor(stage_config, context)
+
+            # 检查取消标志（阶段执行后）(Story 2.15 - 任务 2.4)
+            if self.isInterruptionRequested() or context.is_cancelled:
+                logger.info(f"检测到取消请求，停止阶段 {stage_name}")
+                return StageResult(
+                    status=StageStatus.CANCELLED,
+                    message=f"阶段 {stage_name} 已取消"
+                )
 
             # 确保返回的是 StageResult
             if not isinstance(result, StageResult):
@@ -401,20 +421,59 @@ class WorkflowThread(QThread):
 
         logger.info("请求取消构建")
 
-    def _cleanup_on_cancel(self):
-        """取消时清理资源 (Story 2.15 - 任务 8.1, 8.2, 8.3, 8.4)"""
-        stage_name = self._build_execution.current_stage or "未知阶段"
+    def request_cancellation(self):
+        """请求取消构建 (Story 2.15 - 任务 2.2)
 
-        # 终止进程 (任务 8.2)
+        此方法为 request_cancel() 的别名，提供更明确的命名。
+        设置取消请求标志并调用 QThread 中断机制。
+        """
+        self.request_cancel()
+
+    def _cleanup_on_cancel(self):
+        """取消时清理资源 (Story 2.15 - 任务 8.1, 8.2, 8.3, 8.4, 任务 11)
+
+        Story 2.15 - 任务 11.1-11.6:
+        - 记录取消时间戳
+        - 记录当前执行阶段
+        - 记录已完成的阶段数
+        - 记录进程终止信息
+        - 记录临时文件清理信息
+        """
+        import time
+
+        # 记录取消时间戳 (任务 11.2)
+        cancel_time = time.time()
+        logger.info(f"构建取消时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(cancel_time))}")
+
+        stage_name = self._build_execution.current_stage or "未知阶段"
+        logger.info(f"当前执行阶段: {stage_name}")  # 任务 11.3
+
+        # 统计已完成的阶段数 (任务 11.4)
+        completed_count = len([
+            s for s in self._build_execution.stages
+            if s.status == BuildState.COMPLETED
+        ])
+        total_count = len(self._build_execution.stages)
+        logger.info(f"已完成的阶段数: {completed_count}/{total_count}")
+
+        # 终止进程 (任务 8.2, 11.5)
         process_count = self._context.terminate_processes()
-        logger.info(f"取消时终止 {process_count} 个进程")
+        logger.info(f"进程终止信息: 终止 {process_count} 个进程")
         self.log_message.emit(f"取消时终止 {process_count} 个进程")
 
-        # 清理临时文件 (任务 8.3)
+        # 清理临时文件 (任务 8.3, 11.6)
         file_count = self._context.cleanup_temp_files()
-        logger.info(f"取消时清理 {file_count} 个临时文件")
+        logger.info(f"临时文件清理信息: 清理 {file_count} 个文件")
         self.log_message.emit(f"取消时清理 {file_count} 个临时文件")
 
         # 发送取消信号 (任务 8.4)
         self.build_cancelled.emit(stage_name, "构建已取消")
         logger.info(f"发送取消信号: {stage_name}")
+
+        # 记录完整的取消信息 (任务 11.1)
+        logger.info(
+            f"构建已取消: 阶段={stage_name}, "
+            f"已完成={completed_count}/{total_count}, "
+            f"进程已终止={process_count}, "
+            f"临时文件已清理={file_count}"
+        )

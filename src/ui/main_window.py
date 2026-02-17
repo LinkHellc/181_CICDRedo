@@ -30,6 +30,7 @@ from core.workflow import validate_workflow_config, execute_workflow
 from core.workflow_manager import WorkflowManager
 from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.validation_result_dialog import show_validation_result
+from ui.dialogs.cancel_dialog import CancelConfirmationDialog  # Story 2.15 - 任务 5
 from ui.styles.industrial_theme import apply_industrial_theme, BrandColors, FontManager
 from ui.widgets.log_viewer import LogViewer
 from ui.widgets.progress_panel import ProgressPanel  # Story 2.14 - 任务 5, 8
@@ -737,7 +738,8 @@ class MainWindow(QMainWindow):
             'stage_complete': self._on_stage_complete,
             'log_message': self._on_log_message,
             'error_occurred': self._on_error_occurred,
-            'build_finished': self._on_build_finished
+            'build_finished': self._on_build_finished,
+            'build_cancelled': self._on_build_cancelled  # Story 2.15 - 任务 10.2
         }
 
         success = self._workflow_manager.start_workflow(
@@ -798,20 +800,84 @@ class MainWindow(QMainWindow):
         logger.info("配置界面已解锁")
 
     def _cancel_build(self):
-        """取消构建 (Story 2.4 Task 7.3)"""
-        if self._is_building and self._workflow_manager.is_running():
-            reply = QMessageBox.question(
-                self,
-                "⚠️ 确认取消",
-                "确定要取消当前构建吗？\n\n正在执行的操作将被中断。",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
+        """取消构建 (Story 2.4 Task 7.3)
 
-            if reply == QMessageBox.StandardButton.Yes:
+        Story 2.15 - 任务 6.6:
+        - 连接按钮点击信号到 _on_cancel_clicked 槽函数
+        """
+        self._on_cancel_clicked()
+
+    def _on_cancel_clicked(self):
+        """处理取消按钮点击 (Story 2.15 - 任务 7.1-7.7)
+
+        Story 2.15 - 任务 7.2:
+        - 显示取消确认对话框
+
+        Story 2.15 - 任务 7.3:
+        - 如果用户确认，调用 worker.request_cancellation()
+
+        Story 2.15 - 任务 7.4:
+        - 如果用户取消操作，不做任何操作
+        """
+        logger.info("用户点击取消构建按钮")
+
+        # 显示确认对话框 (Story 2.15 - 任务 7.2, 7.5)
+        if CancelConfirmationDialog.confirm(self):
+            # 用户确认取消 (Story 2.15 - 任务 7.3, 7.6)
+            logger.info("用户确认取消构建")
+
+            if self._is_building and self._workflow_manager.is_running():
                 self.status_bar.showMessage("⏸️ 正在取消构建...")
-                self._workflow_manager.stop_workflow()
-                logger.info("用户请求取消构建")
+
+                # 请求取消工作流
+                worker = self._workflow_manager.get_current_worker()
+                if worker and hasattr(worker, 'request_cancellation'):
+                    worker.request_cancellation()
+                elif worker and hasattr(worker, 'request_cancel'):
+                    worker.request_cancel()
+                else:
+                    self._workflow_manager.stop_workflow()
+
+                logger.info("已请求取消构建")
+            else:
+                logger.warning("工作流未运行，无法取消")
+        else:
+            # 用户取消操作 (Story 2.15 - 任务 7.4, 7.7)
+            logger.info("用户取消操作")
+
+    def _on_build_cancelled(self, stage_name: str, message: str):
+        """构建取消回调 (Story 2.15 - 任务 10.1-10.7)
+
+        处理工作流取消信号，更新 UI 显示取消状态。
+
+        Args:
+            stage_name: 取消时的阶段名称
+            message: 取消消息
+        """
+        logger.info(f"构建已取消: 阶段={stage_name}, 消息={message}")
+
+        # 标记不在构建中
+        self._is_building = False
+
+        # 更新主窗口状态标签 (任务 10.4)
+        self.status_bar.showMessage("⏸️ 构建已取消")
+
+        # 更新进度面板：显示取消状态 (任务 10.5)
+        # 通过 progress_panel.show_cancelled_state() 方法
+        if hasattr(self.progress_panel, 'show_cancelled_state'):
+            self.progress_panel.show_cancelled_state()
+
+        # 禁用"取消构建"按钮 (任务 10.6)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setEnabled(False)
+
+        # 启用"开始构建"按钮 (任务 10.7)
+        self.build_btn.setEnabled(True)
+
+        # 解锁配置 UI
+        self._unlock_config_ui()
+
+        logger.info("取消状态 UI 更新完成")
 
     def _on_build_finished(self, state: BuildState):
         """构建完成回调 (Story 2.4 Task 10.1)"""

@@ -48,6 +48,11 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
     - 使用 MATLAB Engine API 调用脚本
     - 指定代码生成输出目录（./20_Code）
 
+    Story 2.15 - 任务 4.1-4.3:
+    - 添加取消标志检查
+    - 在长时间操作中定期检查取消标志
+    - 检测到取消时返回 CANCELLED 状态
+
     Args:
         config: 阶段配置
         context: 构建上下文
@@ -57,6 +62,11 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
     """
     stage_name = "matlab_gen"
     context.log(f"=== 开始执行阶段: {stage_name} ===")
+
+    # 检查取消标志 (Story 2.15 - 任务 4.1)
+    if context.cancel_requested or context.is_cancelled:
+        context.log(f"阶段 {stage_name} 已取消")
+        return StageResult.cancelled(f"阶段 {stage_name} 已取消")
 
     # 记录开始时间 (Story 2.5 - 任务 6.1)
     start_time = time.monotonic()
@@ -101,6 +111,11 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
 
         # 执行 genCode.m 脚本 (Story 2.5 - 任务 2.4)
         context.log("正在执行 genCode.m 脚本...")
+
+        # 检查取消标志 (Story 2.15 - 任务 4.2)
+        if context.cancel_requested or context.is_cancelled:
+            context.log(f"阶段 {stage_name} 已取消")
+            return StageResult.cancelled(f"阶段 {stage_name} 已取消")
 
         try:
             # 调用 genCode.m (Story 2.5 - 任务 2.5)

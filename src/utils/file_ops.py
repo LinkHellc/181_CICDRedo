@@ -1019,3 +1019,127 @@ def move_output_files_safe(
 
     logger.info(f"批量移动完成: 成功 {len(success_files)} 个，失败 {len(failed_files)} 个")
     return success_files, failed_files
+
+
+# =============================================================================
+# Story 2.15: 临时文件清理函数
+# =============================================================================
+
+def cleanup_temp_files(temp_dir: Path) -> dict:
+    """清理临时文件
+
+    Story 2.15 - 任务 8.1-8.5:
+    - 接受临时目录路径参数
+    - 删除临时目录及其所有内容
+    - 使用 shutil.rmtree() 并设置 ignore_errors=True
+    - 记录清理日志（成功/失败）
+
+    Architecture Decision 4.1:
+    - 原子性文件操作
+    - 临时文件清理，失败不影响主数据
+
+    Args:
+        temp_dir: 临时目录路径
+
+    Returns:
+        dict: 清理结果字典，包含:
+        - success: 是否成功
+        - deleted_count: 删除的文件/目录数量
+        - error: 错误信息（仅当失败时）
+        - suggestions: 恢复建议列表
+
+    Examples:
+        >>> from pathlib import Path
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     base = Path(tmpdir)
+        ...     temp_dir = base / "temp"
+        ...     temp_dir.mkdir()
+        ...     (temp_dir / "file1.txt").write_text("test")
+        ...     (temp_dir / "subdir").mkdir()
+        ...     (temp_dir / "subdir" / "file2.txt").write_text("test2")
+        ...     result = cleanup_temp_files(temp_dir)
+        ...     assert result["success"] is True
+        ...     assert not temp_dir.exists()
+    """
+    result = {
+        "success": False,
+        "deleted_count": 0,
+        "error": None,
+        "suggestions": []
+    }
+
+    try:
+        # 检查目录是否存在 (Task 8.2)
+        if not temp_dir.exists():
+            logger.info(f"临时目录不存在: {temp_dir}")
+            result["success"] = True
+            return result
+
+        if not temp_dir.is_dir():
+            logger.warning(f"路径不是目录: {temp_dir}")
+            result["success"] = False
+            result["error"] = f"路径不是目录: {temp_dir}"
+            result["suggestions"].append("检查路径是否正确")
+            return result
+
+        # 统计文件数量
+        file_count = 0
+        try:
+            for item in temp_dir.rglob("*"):
+                if item.is_file():
+                    file_count += 1
+        except Exception as e:
+            logger.warning(f"统计文件数量失败: {e}")
+
+        logger.info(f"清理临时目录: {temp_dir} ({file_count} 个文件)")
+
+        # 删除目录及其所有内容 (Task 8.3, 8.4)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+        # 验证清理结果 (Task 8.5, 任务 14.4-14.5)
+        if temp_dir.exists():
+            logger.warning(f"临时目录清理后仍存在: {temp_dir}")
+            result["success"] = False
+            result["error"] = f"临时目录清理失败: {temp_dir}"
+            result["deleted_count"] = 0
+
+            # 任务 14.5: 提供手动清理的建议
+            result["suggestions"].append(f"请手动删除临时目录: {temp_dir}")
+
+            # 任务 14.4: 处理临时文件清理失败的情况
+            # 尝试获取更详细的错误信息
+            try:
+                # 检查权限问题
+                if not os.access(temp_dir, os.W_OK):
+                    result["suggestions"].append("目录权限不足，请检查目录权限")
+                    result["suggestions"].append("尝试以管理员身份运行程序")
+
+                # 检查文件占用问题
+                test_file = temp_dir / "test_write.tmp"
+                try:
+                    test_file.touch()
+                    test_file.unlink()
+                except Exception as write_error:
+                    result["suggestions"].append(
+                        f"文件可能被其他程序占用: {write_error}"
+                    )
+                    result["suggestions"].append("请关闭可能占用该目录的程序（如 MATLAB、IAR 等）")
+            except Exception as e:
+                logger.debug(f"无法获取详细错误信息: {e}")
+
+            result["suggestions"].append("如果问题持续存在，请重启计算机")
+            return result
+        else:
+            logger.info(f"临时目录清理成功: {temp_dir} (删除 {file_count} 个文件)")
+            result["success"] = True
+            result["deleted_count"] = file_count
+            return result
+
+    except Exception as e:
+        logger.error(f"清理临时文件失败: {e}")
+        result["error"] = f"清理临时文件失败: {e}"
+        result["suggestions"].append("查看详细日志")
+        result["suggestions"].append("检查磁盘空间")
+        result["suggestions"].append("联系技术支持")
+        return result
