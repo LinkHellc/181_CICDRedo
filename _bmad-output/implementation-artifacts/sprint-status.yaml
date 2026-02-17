@@ -71,7 +71,7 @@ development_status:
 
   # Epic 3: 构建监控与反馈
   epic-3: in-progress
-  3-1-real-time-build-progress-display: ready-for-dev
+  3-1-real-time-build-progress-display: review
   3-2-real-time-build-log-output-display: backlog
   3-3-record-display-stage-execution-time: backlog
   3-4-build-complete-notification: backlog
