@@ -51,11 +51,11 @@ development_status:
   epic-1-retrospective: done
 
   # Epic 2: 工作流执行
-  epic-2: in-progress
+  epic-2: done
   2-1-select-predefined-workflow-template: done
   2-2-load-custom-workflow-config: done
   2-3-validate-workflow-config-effectiveness: done
-  2-4-start-automated-build-process: review
+  2-4-start-automated-build-process: done
   2-5-execute-matlab-code-generation-phase: done
   2-6-extract-process-code-files: done
   2-7-move-code-files-specified-directory: done
@@ -63,10 +63,10 @@ development_status:
   2-9-update-a2l-file-variable-addresses: done
   2-10-replace-a2l-file-xcp-header-content: done
   2-11-create-timestamp-target-folder: done
-  2-12-move-hex-a2l-files-target-folder: backlog
-  2-13-detect-manage-matlab-process-state: backlog
+  2-12-move-hex-a2l-files-target-folder: done
+  2-13-detect-manage-matlab-process-state: done
   2-14-enable-disable-workflow-stages: done
-  2-15-cancel-ongoing-build: in-progress
+  2-15-cancel-ongoing-build: done
   epic-2-retrospective: optional
 
   # Epic 3: 构建监控与反馈
