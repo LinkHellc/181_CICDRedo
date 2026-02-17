@@ -64,6 +64,10 @@ class ProgressPanel(QWidget):
         self.enable_animations = True
         self._animation_value = 0.0  # 用于动画效果的内部值
 
+        # 进度更新频率保证 (任务 9)
+        self.last_update_timestamp = time.monotonic()
+        self.update_frequency_timer = None  # QTimer
+
         # 初始化 UI
         self._init_ui()
 
@@ -122,6 +126,57 @@ class ProgressPanel(QWidget):
 
         self.setLayout(layout)
 
+    def initialize_stages(self, stage_names: list[str]):
+        """初始化阶段列表 (任务 5.1-5.6)
+
+        清空当前阶段列表，并为每个阶段创建列表项。
+        所有阶段的初始状态设置为 PENDING，进度为 0。
+
+        Args:
+            stage_names: 阶段名称列表
+        """
+        # 任务 5.3: 清空阶段列表
+        self.stage_list.setRowCount(0)
+
+        # 任务 5.5: 初始状态设置为 PENDING
+        for stage_name in stage_names:
+            # 添加新行
+            row = self.stage_list.rowCount()
+            self.stage_list.insertRow(row)
+
+            # 任务 5.4: 为每个阶段创建列表项（阶段名称）
+            name_item = QTableWidgetItem(stage_name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.stage_list.setItem(row, 0, name_item)
+
+            # 任务 5.4: 为每个阶段创建列表项（状态）
+            status_text = self._get_stage_status_text(StageStatus.PENDING)
+            status_item = QTableWidgetItem(status_text)
+            status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+            # 应用 PENDING 状态颜色
+            color = self._get_stage_color(StageStatus.PENDING)
+            status_item.setForeground(QColor(color))
+
+            self.stage_list.setItem(row, 1, status_item)
+
+        # 任务 5.6: 设置初始进度为 0
+        self.progress_bar.setValue(0)
+        self.current_stage_label.setText("等待开始...")
+        self.current_stage_label.setStyleSheet(
+            "font-weight: bold; font-size: 14px; color: black; padding: 8px;"
+        )
+
+        # 重置进度对象
+        self.current_progress = BuildProgress(
+            total_stages=len(stage_names),
+            percentage=0.0
+        )
+        for stage_name in stage_names:
+            self.current_progress.stage_statuses[stage_name] = StageStatus.PENDING
+
+        logger.debug(f"已初始化 {len(stage_names)} 个阶段")
+
     def update_progress(self, progress: BuildProgress):
         """更新进度 (任务 6.1-6.7)
 
@@ -129,6 +184,9 @@ class ProgressPanel(QWidget):
             progress: 构建进度对象
         """
         self.current_progress = progress
+
+        # 任务 9.2: 记录最后一次更新的时间戳
+        self.last_update_timestamp = time.monotonic()
 
         # 性能监控 (任务 12.1-12.4)
         current_time = time.monotonic()
@@ -285,6 +343,55 @@ class ProgressPanel(QWidget):
         self._progress_animation.setStartValue(self.progress_bar.value())
         self._progress_animation.setEndValue(int(self.current_progress.percentage))
         self._progress_animation.start()
+
+    def _check_update_frequency(self):
+        """检查更新频率 (任务 9.3)
+
+        如果超过 1 秒没有更新，强制刷新进度显示。
+        这个方法应该由 QTimer 定期调用。
+        """
+        current_time = time.monotonic()
+        elapsed = current_time - self.last_update_timestamp
+
+        # 任务 9.3: 如果超过 1 秒没有更新，强制刷新进度显示
+        if elapsed > 1.0:
+            logger.warning(
+                f"进度更新超过 1 秒: {elapsed:.2f} 秒，强制刷新显示"
+            )
+            # 强制刷新当前进度显示
+            self._force_refresh_display()
+
+    def _force_refresh_display(self):
+        """强制刷新进度显示 (任务 9.3)"""
+        # 重新触发当前进度对象的更新
+        if self.current_progress:
+            self._update_current_stage_label(self.current_progress)
+            self._update_stage_list(self.current_progress)
+            self._update_time_display(self.current_progress)
+
+            # 更新最后更新时间
+            self.last_update_timestamp = time.monotonic()
+
+    def start_update_frequency_monitoring(self):
+        """启动进度更新频率监控 (任务 9.4)
+
+        使用 QTimer 定期检查更新频率，确保进度显示及时更新。
+        """
+        from PyQt6.QtCore import QTimer
+
+        if self.update_frequency_timer is None:
+            self.update_frequency_timer = QTimer(self)
+            self.update_frequency_timer.timeout.connect(self._check_update_frequency)
+            # 每 500ms 检查一次更新频率
+            self.update_frequency_timer.start(500)
+            logger.debug("进度更新频率监控已启动")
+
+    def stop_update_frequency_monitoring(self):
+        """停止进度更新频率监控 (任务 9.4)"""
+        if self.update_frequency_timer is not None:
+            self.update_frequency_timer.stop()
+            self.update_frequency_timer = None
+            logger.debug("进度更新频率监控已停止")
 
     def _on_stage_clicked(self, item: QTableWidgetItem):
         """处理阶段列表项点击 (任务 14.1-14.3)
