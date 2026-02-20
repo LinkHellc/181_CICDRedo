@@ -22,6 +22,8 @@ from core.models import (
     BuildProgress,
     StageStatus
 )
+from core.build_history_manager import get_history_manager
+from core.build_history_models import BuildRecord, StageExecutionRecord
 
 # 类型注解导入（仅在类型检查时使用）
 if TYPE_CHECKING:
@@ -93,6 +95,10 @@ class WorkflowThread(QThread):
         # 构建上下文 (Story 2.15 - 任务 3.3)
         self._context = BuildContext()
 
+        # 构建历史记录 (Story 3.4)
+        self._history_manager = get_history_manager()
+        self._build_record: Optional[BuildRecord] = None
+
         logger.info(f"工作流线程初始化: 项目={project_config.name}, 工作流={workflow_config.name}")
 
     def run(self) -> None:
@@ -107,12 +113,17 @@ class WorkflowThread(QThread):
         Story 2.15 - 任务 3.5, 3.6:
         - 定期检查 isInterruptionRequested()
         - 检测到取消时设置 context.is_cancelled = True
+
+        Story 3.4: 创建和保存构建历史记录
         """
         try:
             # 记录开始时间 (Story 2.4 Task 6.1)
             start_time = time.monotonic()
             self._build_execution.start_time = start_time
             self._build_execution.state = BuildState.RUNNING
+
+            # Story 3.4: 创建构建历史记录
+            self._create_build_record(start_time)
 
             logger.info(f"工作流开始执行: {self.workflow_config.name}")
             self.log_message.emit(self._add_timestamp(f"工作流开始: {self.workflow_config.name}"))
@@ -122,6 +133,7 @@ class WorkflowThread(QThread):
 
             # 计算总执行时长 (Story 2.4 Task 6.4)
             elapsed = time.monotonic() - start_time
+            end_time = datetime.now()
             self._build_execution.end_time = time.monotonic()
             self._build_execution.duration = elapsed
 
@@ -149,6 +161,9 @@ class WorkflowThread(QThread):
                 # Story 3.3: 即使失败也显示部分汇总信息
                 self._emit_summary()
 
+            # Story 3.4: 更新并保存构建历史记录
+            self._update_and_save_build_record(end_time, final_state, elapsed)
+
             # 发送完成信号
             self.build_finished.emit(final_state)
 
@@ -159,6 +174,19 @@ class WorkflowThread(QThread):
             self._build_execution.error_message = f"未预期错误: {str(e)}"
             self.error_occurred.emit(f"未预期错误: {str(e)}", ["查看日志获取详细信息"])
             self.build_finished.emit(BuildState.FAILED)
+
+            # Story 3.4: 保存失败的构建记录
+            try:
+                if self._build_record:
+                    self._history_manager.update_build_record(
+                        self._build_record.build_id,
+                        state=BuildState.FAILED,
+                        end_time=datetime.now(),
+                        error_message=f"未预期错误: {str(e)}"
+                    )
+                    self._history_manager.save_build_record(self._build_record.build_id)
+            except Exception as he:
+                logger.error(f"保存失败的构建记录时出错: {he}")
 
     def _execute_workflow_internal(self) -> bool:
         """执行工作流内部实现 (Story 2.4 Task 2.5)
@@ -552,3 +580,105 @@ class WorkflowThread(QThread):
         for line in summary_lines:
             if line:  # 跳过空行
                 self.log_message.emit(self._add_timestamp(line))
+
+    def _create_build_record(self, start_time: float):
+        """创建构建历史记录 (Story 3.4)
+
+        Args:
+            start_time: 开始时间戳
+        """
+        try:
+            import uuid
+            build_id = str(uuid.uuid4())
+
+            # 创建配置快照
+            config_snapshot = {
+                'project_name': self.project_config.name,
+                'workflow_id': self.workflow_config.id,
+                'workflow_name': self.workflow_config.name,
+                'simulink_path': self.project_config.simulink_path,
+                'matlab_code_path': self.project_config.matlab_code_path,
+                'a2l_path': self.project_config.a2l_path,
+                'target_path': self.project_config.target_path,
+                'iar_project_path': self.project_config.iar_project_path,
+            }
+
+            # 创建构建记录
+            self._build_record = self._history_manager.create_build_record(
+                project_name=self.project_config.name,
+                workflow_name=self.workflow_config.name,
+                workflow_id=self.workflow_config.id,
+                config_snapshot=config_snapshot
+            )
+
+            logger.info(f"创建构建历史记录: build_id={build_id}")
+
+        except Exception as e:
+            logger.error(f"创建构建历史记录失败: {e}")
+
+    def _update_and_save_build_record(
+        self,
+        end_time: datetime,
+        state: BuildState,
+        duration: float
+    ):
+        """更新并保存构建历史记录 (Story 3.4)
+
+        Args:
+            end_time: 结束时间
+            state: 最终状态
+            duration: 总耗时
+        """
+        if not self._build_record:
+            return
+
+        try:
+            # 收集阶段执行记录
+            stage_records = []
+
+            for stage_execution in self._build_execution.stages:
+                # 转换 StageExecution 为 StageExecutionRecord
+                stage_status = StageStatus.COMPLETED
+                if stage_execution.status == BuildState.FAILED:
+                    stage_status = StageStatus.FAILED
+                elif stage_execution.status == BuildState.CANCELLED:
+                    stage_status = StageStatus.CANCELLED
+
+                stage_record = StageExecutionRecord(
+                    stage_id=f"{self._build_record.build_id}_{stage_execution.name}",
+                    build_id=self._build_record.build_id,
+                    stage_name=stage_execution.name,
+                    status=stage_status,
+                    start_time=datetime.fromtimestamp(stage_execution.start_time),
+                    end_time=datetime.fromtimestamp(stage_execution.end_time) if stage_execution.end_time else None,
+                    duration=stage_execution.duration,
+                    error_message=stage_execution.error_message
+                )
+                stage_records.append(stage_record)
+
+            # 收集输出文件
+            output_files = []
+            for stage_execution in self._build_execution.stages:
+                if stage_execution.output_files:
+                    output_files.extend(stage_execution.output_files)
+
+            # 更新构建记录
+            self._history_manager.update_build_record(
+                self._build_record.build_id,
+                end_time=end_time,
+                state=state,
+                duration=duration,
+                progress_percent=100 if state == BuildState.COMPLETED else self._build_execution.progress_percent,
+                current_stage=None,
+                error_message=self._build_execution.error_message,
+                stage_results=stage_records,
+                output_files=output_files
+            )
+
+            # 保存构建记录
+            self._history_manager.save_build_record(self._build_record.build_id)
+
+            logger.info(f"保存构建历史记录: build_id={self._build_record.build_id}, state={state.value}")
+
+        except Exception as e:
+            logger.error(f"更新和保存构建历史记录失败: {e}")

@@ -31,6 +31,7 @@ from core.workflow_manager import WorkflowManager
 from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.validation_result_dialog import show_validation_result
 from ui.dialogs.cancel_dialog import CancelConfirmationDialog  # Story 2.15 - 任务 5
+from ui.dialogs.build_history_dialog import show_build_history  # Story 3.4
 from ui.styles.industrial_theme import apply_industrial_theme, BrandColors, FontManager
 from ui.widgets.log_viewer import LogViewer
 from ui.widgets.progress_panel import ProgressPanel  # Story 2.14 - 任务 5, 8
@@ -358,6 +359,13 @@ class MainWindow(QMainWindow):
         stats_row.addWidget(self.project_count_label)
         stats_row.addStretch()
         layout.addLayout(stats_row)
+
+        # Story 3.4: 构建历史按钮
+        history_btn = QPushButton("📊 查看构建历史")
+        history_btn.setProperty("secondary", True)
+        history_btn.setMinimumHeight(48)
+        history_btn.clicked.connect(self._show_build_history)
+        layout.addWidget(history_btn)
 
         return card
 
@@ -987,6 +995,11 @@ class MainWindow(QMainWindow):
             </ul>
             """
         )
+
+    def _show_build_history(self):
+        """显示构建历史对话框 (Story 3.4)"""
+        show_build_history(self)
+        logger.info("打开构建历史对话框")
 
     def get_current_config(self) -> ProjectConfig | None:
         """获取当前加载的项目配置

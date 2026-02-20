@@ -94,11 +94,21 @@ class StageExecutionRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
-        data = asdict(self)
-        data['status'] = self.status.value
-        data['start_time'] = self.start_time.isoformat()
+        data = {
+            'stage_id': self.stage_id,
+            'build_id': self.build_id,
+            'stage_name': self.stage_name,
+            'status': self.status.value,
+            'start_time': self.start_time.isoformat(),
+            'duration': self.duration,
+            'error_message': self.error_message,
+            'output_files': self.output_files,
+            'logs': self.logs
+        }
+
         if self.end_time:
             data['end_time'] = self.end_time.isoformat()
+
         return data
 
     @classmethod
@@ -154,19 +164,42 @@ class BuildRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
-        data = asdict(self)
-        data['state'] = self.state.value
-        data['start_time'] = self.start_time.isoformat()
+        # Convert stage_results to dictionaries
+        stage_results_dicts = []
+        for stage in self.stage_results:
+            if isinstance(stage, StageExecutionRecord):
+                stage_results_dicts.append(stage.to_dict())
+            elif isinstance(stage, dict):
+                # Already a dictionary, use as is
+                stage_results_dicts.append(stage)
+            else:
+                # Unknown type, convert to string representation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Unexpected stage type: {type(stage)}")
+                stage_results_dicts.append(str(stage))
+
+        # Build dictionary manually to avoid asdict() issues with enums
+        data = {
+            'build_id': self.build_id,
+            'project_name': self.project_name,
+            'workflow_name': self.workflow_name,
+            'workflow_id': self.workflow_id,
+            'state': self.state.value,
+            'start_time': self.start_time.isoformat(),
+            'duration': self.duration,
+            'progress_percent': self.progress_percent,
+            'current_stage': self.current_stage,
+            'error_message': self.error_message,
+            'output_files': self.output_files,
+            'stage_results': stage_results_dicts,
+            'config_snapshot': self.config_snapshot,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat()
+        }
+
         if self.end_time:
             data['end_time'] = self.end_time.isoformat()
-        data['created_at'] = self.created_at.isoformat()
-        data['updated_at'] = self.updated_at.isoformat()
-
-        # Convert stage results
-        data['stage_results'] = [
-            stage.to_dict() if isinstance(stage, StageExecutionRecord) else stage
-            for stage in self.stage_results
-        ]
 
         return data
 
