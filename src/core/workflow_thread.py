@@ -6,6 +6,7 @@ following Architecture Decision 3.1 (PyQt6 Threading).
 
 import logging
 import time
+from datetime import datetime
 from typing import Optional, Callable, TYPE_CHECKING
 
 from PyQt6.QtCore import QThread, pyqtSignal, QObject, Qt
@@ -114,7 +115,7 @@ class WorkflowThread(QThread):
             self._build_execution.state = BuildState.RUNNING
 
             logger.info(f"工作流开始执行: {self.workflow_config.name}")
-            self.log_message.emit(f"工作流开始: {self.workflow_config.name}")
+            self.log_message.emit(self._add_timestamp(f"工作流开始: {self.workflow_config.name}"))
 
             # 执行工作流 (Story 2.4 Task 2.5)
             success = self._execute_workflow_internal()
@@ -130,19 +131,19 @@ class WorkflowThread(QThread):
                 self._build_execution.state = BuildState.CANCELLED
                 self._build_execution.error_message = "构建被用户取消"
                 logger.info("工作流已取消")
-                self.log_message.emit("工作流已被用户取消")
+                self.log_message.emit(self._add_timestamp("工作流已被用户取消"))
                 # 执行清理 (Story 2.15 - 任务 8)
                 self._cleanup_on_cancel()
             elif success:
                 final_state = BuildState.COMPLETED
                 self._build_execution.state = BuildState.COMPLETED
                 logger.info(f"工作流执行成功，耗时: {elapsed:.2f} 秒")
-                self.log_message.emit(f"工作流执行完成，耗时: {elapsed:.2f} 秒")
+                self.log_message.emit(self._add_timestamp(f"工作流执行完成，耗时: {elapsed:.2f} 秒"))
             else:
                 final_state = BuildState.FAILED
                 self._build_execution.state = BuildState.FAILED
                 logger.error(f"工作流执行失败，耗时: {elapsed:.2f} 秒")
-                self.log_message.emit(f"工作流执行失败: {self._build_execution.error_message}")
+                self.log_message.emit(self._add_timestamp(f"工作流执行失败: {self._build_execution.error_message}"))
 
             # 发送完成信号
             self.build_finished.emit(final_state)
@@ -195,7 +196,7 @@ class WorkflowThread(QThread):
             state={
                 "build_start_time": self._build_execution.start_time
             },
-            log_callback=lambda msg: self.log_message.emit(msg)
+            log_callback=lambda msg: self.log_message.emit(self._add_timestamp(msg))
         )
 
         # Story 2.14 - 任务 7.1: 初始化 BuildProgress 对象
@@ -305,7 +306,7 @@ class WorkflowThread(QThread):
             if result.status.value == "failed":
                 error_msg = f"阶段 {stage_name} 失败: {result.message}"
                 logger.error(error_msg)
-                self.log_message.emit(error_msg)
+                self.log_message.emit(self._add_timestamp(error_msg))
                 self._build_execution.error_message = error_msg
 
                 # 发送错误信号
@@ -317,7 +318,7 @@ class WorkflowThread(QThread):
                 return False
             elif result.status.value == "cancelled":
                 logger.info(f"阶段 {stage_name} 已取消")
-                self.log_message.emit(f"阶段 {stage_name} 已取消")
+                self.log_message.emit(self._add_timestamp(f"阶段 {stage_name} 已取消"))
                 return False
 
         # 所有阶段完成，更新进度到 100%
@@ -429,6 +430,28 @@ class WorkflowThread(QThread):
         """
         self.request_cancel()
 
+    def _add_timestamp(self, message: str) -> str:
+        """
+        添加时间戳到日志消息 (Story 3.2 Task 3.1-3.5)
+
+        使用 time.monotonic() 获取相对时间，使用 time.time() 获取实际时间戳。
+        时间戳格式为 [HH:MM:SS]。
+
+        Args:
+            message: 原始日志消息
+
+        Returns:
+            str: 带时间戳的日志消息
+        """
+        # 使用 time.time() 获取实际时间（用于显示时间戳）
+        actual_time = time.time()
+
+        # 格式化时间戳为 [HH:MM:SS] 格式
+        timestamp = datetime.fromtimestamp(actual_time).strftime("[%H:%M:%S]")
+
+        # 返回带时间戳的消息
+        return f"{timestamp} {message}"
+
     def _cleanup_on_cancel(self):
         """取消时清理资源 (Story 2.15 - 任务 8.1, 8.2, 8.3, 8.4, 任务 11)
 
@@ -459,12 +482,12 @@ class WorkflowThread(QThread):
         # 终止进程 (任务 8.2, 11.5)
         process_count = self._context.terminate_processes()
         logger.info(f"进程终止信息: 终止 {process_count} 个进程")
-        self.log_message.emit(f"取消时终止 {process_count} 个进程")
+        self.log_message.emit(self._add_timestamp(f"取消时终止 {process_count} 个进程"))
 
         # 清理临时文件 (任务 8.3, 11.6)
         file_count = self._context.cleanup_temp_files()
         logger.info(f"临时文件清理信息: 清理 {file_count} 个文件")
-        self.log_message.emit(f"取消时清理 {file_count} 个临时文件")
+        self.log_message.emit(self._add_timestamp(f"取消时清理 {file_count} 个临时文件"))
 
         # 发送取消信号 (任务 8.4)
         self.build_cancelled.emit(stage_name, "构建已取消")
