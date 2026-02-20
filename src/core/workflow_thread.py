@@ -139,11 +139,15 @@ class WorkflowThread(QThread):
                 self._build_execution.state = BuildState.COMPLETED
                 logger.info(f"工作流执行成功，耗时: {elapsed:.2f} 秒")
                 self.log_message.emit(self._add_timestamp(f"工作流执行完成，耗时: {elapsed:.2f} 秒"))
+                # Story 3.3: 显示工作流完成汇总信息
+                self._emit_summary()
             else:
                 final_state = BuildState.FAILED
                 self._build_execution.state = BuildState.FAILED
                 logger.error(f"工作流执行失败，耗时: {elapsed:.2f} 秒")
                 self.log_message.emit(self._add_timestamp(f"工作流执行失败: {self._build_execution.error_message}"))
+                # Story 3.3: 即使失败也显示部分汇总信息
+                self._emit_summary()
 
             # 发送完成信号
             self.build_finished.emit(final_state)
@@ -297,6 +301,12 @@ class WorkflowThread(QThread):
                 build_progress.percentage
             )
             self.progress_update_detailed.emit(build_progress)
+
+            # Story 3.3: 发射阶段执行时间信息
+            if result.status.value == "completed":
+                time_msg = f"[{stage_name}] 执行时长: {stage_execution.duration:.2f} 秒"
+                logger.info(time_msg)
+                self.log_message.emit(self._add_timestamp(time_msg))
 
             # 发送阶段完成信号
             success = (result.status.value == "completed")
@@ -500,3 +510,45 @@ class WorkflowThread(QThread):
             f"进程已终止={process_count}, "
             f"临时文件已清理={file_count}"
         )
+
+    def _emit_summary(self):
+        """发射工作流执行汇总信息 (Story 3.3)
+
+        计算并显示以下信息：
+        - 总耗时
+        - 最慢阶段
+        - 最快阶段
+        """
+        stages = self._build_execution.stages
+        if not stages:
+            return
+
+        # 统计已完成的阶段
+        completed_stages = [s for s in stages if s.status == BuildState.COMPLETED]
+        if not completed_stages:
+            return
+
+        # 计算汇总信息
+        total_duration = self._build_execution.duration
+        slowest_stage = max(completed_stages, key=lambda s: s.duration)
+        fastest_stage = min(completed_stages, key=lambda s: s.duration)
+
+        # 构建汇总消息
+        summary_lines = [
+            "",
+            "========== 工作流执行汇总 ==========",
+            f"总耗时: {total_duration:.2f} 秒",
+            f"已完成阶段数: {len(completed_stages)}/{len(stages)}",
+            f"最慢阶段: [{slowest_stage.name}] {slowest_stage.duration:.2f} 秒",
+            f"最快阶段: [{fastest_stage.name}] {fastest_stage.duration:.2f} 秒",
+            "===================================",
+            ""
+        ]
+
+        summary_msg = "\n".join(summary_lines)
+        logger.info(summary_msg)
+
+        # 发射汇总信息
+        for line in summary_lines:
+            if line:  # 跳过空行
+                self.log_message.emit(self._add_timestamp(line))
