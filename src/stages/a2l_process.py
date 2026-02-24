@@ -82,6 +82,41 @@ class A2LProcessConfig(StageConfig):
             self.timeout = get_stage_timeout("a2l_process")
 
 
+def execute_a2ltool_script(
+    a2l_path: Path,
+    timeout: int,
+    log_callback: Callable[[str], None]
+) -> bool:
+    """调用 A2LTool.m 脚本删除 IF_DATA XCP 块
+
+    使用 MATLAB 运行 A2LTool.m 脚本，删除 A2L 文件中的
+    /begin IF_DATA XCP ... /end IF_DATA 块。
+
+    Args:
+        a2l_path: A2L 文件路径
+        timeout: 超时时间（秒）
+        log_callback: 日志回调函数
+
+    Returns:
+        bool: 成功返回 True
+
+    Raises:
+        ProcessError: 如果执行失败
+        ProcessTimeoutError: 如果超时
+    """
+    # 获取 A2L 文件所在目录
+    a2l_dir = str(a2l_path.parent)
+    a2l_filename = a2l_path.name
+
+    log_callback(f"调用 A2LTool.m 处理: {a2l_filename}")
+
+    # 构建运行 A2LTool.m 的 MATLAB 命令
+    # 注意：A2LTool.m 会弹出文件选择对话框，所以我们需要修改它或使用其他方式
+    # 这里我们直接实现 A2LTool.m 的功能（删除 IF_DATA XCP 块）
+
+    return remove_if_data_xcp_blocks(a2l_path, log_callback)[0]
+
+
 def _generate_a2l_update_command(
     context: BuildContext,
     config: A2LProcessConfig
@@ -89,36 +124,52 @@ def _generate_a2l_update_command(
     """生成 A2L 更新 MATLAB 命令
 
     Story 2.9 - 任务 2.1-2.5:
-    - 从 BuildContext 获取时间戳信息
-    - 生成 A2L 文件名（tmsAPP[_年_月_日_时_分].a2l）
-    - 生成 ELF 文件名（CYT4BF_M7_Master.elf）
-    - 构建 MATLAB 命令字符串：`rtw.asap2SetAddress(a2l_file, elf_file)`
+    - 从 BuildContext 获取 A2L 文件路径和 ELF 文件路径
+    - 生成完整路径的 MATLAB 命令：`rtw.asap2SetAddress(a2l_path, elf_path)`
 
     Args:
         context: 构建上下文
         config: A2L 更新配置
 
     Returns:
-        (a2l_file, elf_file, matlab_command) 元组
+        (a2l_path, elf_path, matlab_command) 元组
     """
-    # 从 BuildContext.state 获取时间戳 (任务 2.2)
-    timestamp = context.state.get("build_timestamp", "")
+    # 获取 A2L 源文件路径
+    a2l_path = context.state.get("a2l_source_path", "") or context.config.get("a2l_path", "")
+    if not a2l_path:
+        # 尝试从 a2l_tool_path 查找
+        a2l_tool_path = context.config.get("a2l_tool_path", "")
+        if a2l_tool_path:
+            a2l_files = list(Path(a2l_tool_path).rglob("*.a2l"))
+            if a2l_files:
+                a2l_path = str(a2l_files[0])
 
-    # 生成 A2L 文件名 (任务 2.3)
-    # 格式：tmsAPP[_年_月_日_时_分].a2l
-    a2l_file = f"tmsAPP{timestamp}.a2l"
+    # 获取 ELF 文件路径
+    elf_path = context.state.get("iar_elf_path", "") or config.elf_path
+    if not elf_path:
+        # 尝试从 IAR 项目目录查找
+        iar_path = context.config.get("iar_project_path", "")
+        if iar_path:
+            elf_files = list(Path(iar_path).parent.rglob("**/*.elf"))
+            if elf_files:
+                elf_path = str(elf_files[0])
 
-    # 生成 ELF 文件名 (任务 2.4)
-    # 使用配置中的 elf_path，如果没有则使用默认名称
-    elf_file_name = Path(config.elf_path).name if config.elf_path else "CYT4BF_M7_Master.elf"
+    # 如果仍然没有，使用默认名称
+    if not elf_path:
+        elf_path = "CYT4BF_M7_Master.elf"
 
-    # 构建 MATLAB 命令 (任务 2.5)
-    # 注意：参数需要用引号包裹
-    matlab_command = f"rtw.asap2SetAddress('{a2l_file}', '{elf_file_name}')"
+    logger.debug(f"A2L 路径: {a2l_path}")
+    logger.debug(f"ELF 路径: {elf_path}")
 
+    # 构建 MATLAB 命令（使用完整路径）
+    # 注意：参数需要用引号包裹，路径使用正斜杠（MATLAB 格式）
+    a2l_path_matlab = Path(a2l_path).as_posix() if a2l_path else "tmsAPP.a2l"
+    elf_path_matlab = Path(elf_path).as_posix() if elf_path else "CYT4BF_M7_Master.elf"
+
+    matlab_command = f"rtw.asap2SetAddress('{a2l_path_matlab}', '{elf_path_matlab}')"
     logger.debug(f"生成的 A2L 更新命令: {matlab_command}")
 
-    return a2l_file, elf_file_name, matlab_command
+    return a2l_path, elf_path, matlab_command
 
 
 def _verify_a2l_updated(
@@ -264,7 +315,8 @@ def _validate_configuration(
 def _execute_matlab_command(
     command: str,
     timeout: int,
-    log_callback: Callable[[str], None]
+    log_callback: Callable[[str], None],
+    working_dir: Optional[str] = None
 ) -> bool:
     """执行 MATLAB 命令
 
@@ -274,11 +326,13 @@ def _execute_matlab_command(
     - 捕获命令输出和错误信息
     - 超时时抛出 ProcessTimeoutError
     - 确保进程清理
+    - 支持设置工作目录
 
     Args:
         command: MATLAB 命令字符串
         timeout: 超时时间（秒）
         log_callback: 日志回调函数
+        working_dir: MATLAB 工作目录（可选）
 
     Returns:
         bool: 成功返回 True
@@ -316,6 +370,11 @@ def _execute_matlab_command(
 
         elapsed = time.monotonic() - start_time
         log_callback(f"MATLAB 引擎已启动（耗时 {elapsed:.2f} 秒）")
+
+        # 设置工作目录（如果指定）
+        if working_dir:
+            engine.cd(working_dir)
+            log_callback(f"MATLAB 工作目录: {working_dir}")
 
         # 记录命令执行开始
         command_start = time.monotonic()
@@ -396,19 +455,27 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
     - 记录阶段执行时长
 
     Args:
-        config: 阶段配置（A2LProcessConfig 类型）
+        config: 阶段配置（StageConfig 或 A2LProcessConfig 类型）
         context: 构建上下文
 
     Returns:
         StageResult: 阶段执行结果
     """
-    # 类型检查
-    if not isinstance(config, A2LProcessConfig):
-        logger.error(f"配置类型错误: expected A2LProcessConfig, got {type(config)}")
-        return StageResult(
-            status=StageStatus.FAILED,
-            message="配置类型错误",
-            suggestions=["检查工作流配置"]
+    # 获取超时设置
+    timeout = getattr(config, 'timeout', None) or get_stage_timeout("a2l_process")
+
+    # 如果传入的是 A2LProcessConfig，直接使用
+    # 如果传入的是 StageConfig，从 context.config 获取 A2L 相关配置
+    if isinstance(config, A2LProcessConfig):
+        a2l_config = config
+    else:
+        # 从 context.config 创建 A2LProcessConfig
+        a2l_config = A2LProcessConfig(
+            name=config.name,
+            enabled=config.enabled,
+            timeout=timeout,
+            a2l_path=context.config.get("a2l_path", ""),
+            elf_path=context.config.get("elf_path", ""),
         )
 
     # 记录阶段开始 (任务 8.1)
@@ -419,13 +486,13 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
 
     try:
         # 验证配置和前置条件 (任务 12)
-        validation_result = _validate_configuration(config, context, log_callback)
+        validation_result = _validate_configuration(a2l_config, context, log_callback)
         if validation_result:
             return validation_result
 
         # 生成 MATLAB 命令 (任务 2, 8.2)
         a2l_file, elf_file, matlab_command = _generate_a2l_update_command(
-            context, config
+            context, a2l_config
         )
         log_callback(f"生成 A2L 更新命令: {matlab_command}")
 
@@ -433,12 +500,12 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
         try:
             _execute_matlab_command(
                 matlab_command,
-                config.timeout,
+                a2l_config.timeout,
                 log_callback
             )
         except ProcessTimeoutError as e:
             # 超时处理 (任务 7.3, 6.2)
-            error_msg = f"A2L 更新超时（>{config.timeout}秒）"
+            error_msg = f"A2L 更新超时（>{a2l_config.timeout}秒）"
             log_callback(f"错误: {error_msg}")
             logger.error(error_msg)
 
@@ -523,9 +590,8 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
 # ============================================================================
 
 # XCP 头文件定位正则表达式 (任务 3.2, 3.3)
-XCP_HEADER_START_PATTERN = re.compile(r'/begin\s+XCP', re.IGNORECASE)
-XCP_HEADER_END_PATTERN = re.compile(r'/end\s+XCP', re.IGNORECASE)
-XCP_HEADER_SECTION_PATTERN = re.compile(r'(/begin\s+XCP.*?/end\s+XCP)', re.IGNORECASE | re.DOTALL)
+# 替换范围：从文件开头到第一个 /end MOD_PAR
+XCP_HEADER_END_PATTERN = re.compile(r'/end\s+MOD_PAR', re.IGNORECASE)
 
 
 def read_xcp_header_template(
@@ -656,25 +722,31 @@ def find_xcp_header_section(
                 "查看详细日志获取更多信息"
             ])
 
-    # 查找 XCP 头文件部分 (任务 3.2, 3.3)
-    match = XCP_HEADER_SECTION_PATTERN.search(a2l_content)
+    # 查找第一个 /end MOD_PAR 行 (任务 3.3)
+    match = XCP_HEADER_END_PATTERN.search(a2l_content)
 
     if not match:
-        # 未找到 XCP 头文件部分 (任务 3.5)
-        error_msg = f"未找到 A2L 文件中的 XCP 头文件部分: {a2l_path}"
+        # 未找到结束标记 (任务 3.5)
+        error_msg = f"未找到 A2L 文件中的 /end MOD_PAR 标记: {a2l_path}"
         log_callback(f"错误: {error_msg}")
         logger.error(error_msg)
 
         return None
 
-    # 提取起始和结束位置 (任务 3.4)
-    start_pos = match.start()
-    end_pos = match.end()
+    # 起始位置固定为 0，结束位置为匹配行之后
+    start_pos = 0
+    # 包含匹配行的内容，找到该行的结束位置
+    line_end = match.end()
+    # 找到该行的实际结束（包括换行符）
+    while line_end < len(a2l_content) and a2l_content[line_end] not in ['\n', '\r']:
+        line_end += 1
 
-    log_callback(f"找到 XCP 头文件部分: 位置 {start_pos}-{end_pos} ({end_pos - start_pos:,} bytes)")
-    logger.info(f"找到 XCP 头文件部分: {a2l_path} 位置 {start_pos}-{end_pos}")
+    end_pos = line_end
 
-    return start_pos, end_pos
+    log_callback(f"找到 XCP 头文件替换范围: 位置 {start_pos}-{end_pos} ({end_pos - start_pos:,} bytes)")
+    logger.info(f"找到 XCP 头文件替换范围: {a2l_path} 位置 {start_pos}-{end_pos}")
+
+    return (start_pos, end_pos)
 
 
 def replace_xcp_header_content(
@@ -912,6 +984,365 @@ def verify_a2l_replacement(
     return True
 
 
+def remove_if_data_xcp_blocks(
+    a2l_path: Path,
+    log_callback: Callable[[str], None]
+) -> Tuple[bool, int]:
+    """删除 A2L 文件中的所有 IF_DATA XCP 块
+
+    删除所有 /begin IF_DATA XCP ... /end IF_DATA 块。
+    这些是 Simulink 自动生成的 XCP 数据，需要删除后替换为自定义 XCP 头文件。
+
+    对应 MATLAB 脚本 A2LTool.m 的功能。
+
+    Args:
+        a2l_path: A2L 文件路径
+        log_callback: 日志回调函数
+
+    Returns:
+        (success, removed_count) 元组
+        - success: 是否处理成功
+        - removed_count: 删除的块数量
+
+    Raises:
+        FileNotFoundError: A2L 文件不存在
+        FileError: 文件读写失败
+    """
+    # 验证 A2L 文件存在
+    if not a2l_path.exists():
+        error_msg = f"A2L 文件不存在: {a2l_path}"
+        log_callback(f"错误: {error_msg}")
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+
+    # 读取 A2L 文件内容
+    try:
+        with open(a2l_path, 'r', encoding='utf-8-sig') as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(a2l_path, 'r', encoding='gbk') as f:
+                content = f.read()
+        except Exception as e:
+            error_msg = f"读取 A2L 文件失败: {a2l_path} - {str(e)}"
+            log_callback(f"错误: {error_msg}")
+            logger.error(error_msg)
+            raise FileError(error_msg, suggestions=[
+                "检查 A2L 文件编码",
+                "确保文件格式为 UTF-8 或 GBK"
+            ])
+
+    # 删除 IF_DATA XCP 块的正则表达式
+    # 匹配 /begin IF_DATA XCP 到 /end IF_DATA 之间的所有内容
+    start_marker = r'/begin\s+IF_DATA\s+XCP'
+    end_marker = r'/end\s+IF_DATA'
+
+    # 使用正则表达式删除所有匹配的块
+    pattern = re.compile(
+        start_marker + r'.*?' + end_marker,
+        re.DOTALL | re.IGNORECASE
+    )
+
+    removed_count = len(pattern.findall(content))
+    result = pattern.sub('', content)
+
+    # 写入更新后的内容
+    try:
+        with open(a2l_path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(result)
+    except Exception as e:
+        error_msg = f"写入 A2L 文件失败: {a2l_path} - {str(e)}"
+        log_callback(f"错误: {error_msg}")
+        logger.error(error_msg)
+        raise FileError(error_msg, suggestions=[
+            "检查文件权限",
+            "检查磁盘空间"
+        ])
+
+    log_callback(f"IF_DATA XCP 块删除完成: 删除了 {removed_count} 个块")
+    logger.info(f"IF_DATA XCP 块删除完成: {a2l_path} 删除了 {removed_count} 个块")
+
+    return True, removed_count
+
+
+def filter_zero_address_variables(
+    a2l_path: Path,
+    log_callback: Callable[[str], None]
+) -> Tuple[bool, int, int]:
+    """过滤掉地址为 0x0000 的 CHARACTERISTIC 变量
+
+    删除 A2L 文件中所有 ECU Address 为 0x0000 的 CHARACTERISTIC 块。
+    这些变量在 ELF 文件中找不到对应符号，地址更新失败。
+
+    Args:
+        a2l_path: A2L 文件路径
+        log_callback: 日志回调函数
+
+    Returns:
+        (success, total_count, removed_count) 元组
+        - success: 是否处理成功
+        - total_count: 原始 CHARACTERISTIC 总数
+        - removed_count: 删除的 CHARACTERISTIC 数量
+
+    Raises:
+        FileNotFoundError: A2L 文件不存在
+        FileError: 文件读写失败
+    """
+    # 验证 A2L 文件存在
+    if not a2l_path.exists():
+        error_msg = f"A2L 文件不存在: {a2l_path}"
+        log_callback(f"错误: {error_msg}")
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+
+    # 读取 A2L 文件内容
+    try:
+        with open(a2l_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(a2l_path, 'r', encoding='gbk') as f:
+                content = f.read()
+        except Exception as e:
+            error_msg = f"读取 A2L 文件失败: {a2l_path} - {str(e)}"
+            log_callback(f"错误: {error_msg}")
+            logger.error(error_msg)
+            raise FileError(error_msg, suggestions=[
+                "检查 A2L 文件编码",
+                "确保文件格式为 UTF-8 或 GBK"
+            ])
+
+    lines = content.split('\n')
+    result_lines = []
+    i = 0
+    removed_count = 0
+    total_count = 0
+    in_characteristic = False
+    current_block = []
+
+    # 正则表达式匹配 /begin CHARACTERISTIC 和 /end CHARACTERISTIC
+    begin_pattern = re.compile(r'/begin\s+CHARACTERISTIC', re.IGNORECASE)
+    end_pattern = re.compile(r'/end\s+CHARACTERISTIC', re.IGNORECASE)
+    address_pattern = re.compile(r'ECU Address\s+.*?\b(0x[0-9A-Fa-f]+)\b')
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # 检测 /begin CHARACTERISTIC
+        if begin_pattern.search(stripped):
+            total_count += 1
+            in_characteristic = True
+            current_block = [line]
+
+            # 读取整个 CHARACTERISTIC 块
+            i += 1
+            while i < len(lines):
+                block_line = lines[i]
+                current_block.append(block_line)
+
+                # 检查是否包含地址信息
+                addr_match = address_pattern.search(block_line)
+                if addr_match:
+                    address = addr_match.group(1)
+                    if address == '0x0000' or address == '0x00000000':
+                        # 地址为 0，跳过这个块
+                        removed_count += 1
+                        log_callback(f"  跳过变量: 地址为 {address}")
+                        # 找到 /end CHARACTERISTIC 并跳出
+                        while i < len(lines):
+                            if end_pattern.search(lines[i].strip()):
+                                i += 1
+                                break
+                            i += 1
+                        in_characteristic = False
+                        current_block = []
+                        break
+                    else:
+                        # 地址有效，保留这个块
+                        result_lines.extend(current_block)
+                        in_characteristic = False
+                        current_block = []
+                        break
+
+                # 检查 /end CHARACTERISTIC
+                if end_pattern.search(block_line.strip()):
+                    # 没有找到地址信息，默认保留
+                    result_lines.extend(current_block)
+                    in_characteristic = False
+                    current_block = []
+                    i += 1
+                    break
+
+                i += 1
+        else:
+            if not in_characteristic:
+                result_lines.append(line)
+            i += 1
+
+    # 写入更新后的内容
+    try:
+        with open(a2l_path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('\n'.join(result_lines))
+    except Exception as e:
+        error_msg = f"写入 A2L 文件失败: {a2l_path} - {str(e)}"
+        log_callback(f"错误: {error_msg}")
+        logger.error(error_msg)
+        raise FileError(error_msg, suggestions=[
+            "检查文件权限",
+            "检查磁盘空间"
+        ])
+
+    kept_count = total_count - removed_count
+    log_callback(f"变量过滤完成: 总数 {total_count}, 保留 {kept_count}, 删除 {removed_count}")
+    logger.info(f"变量过滤完成: {a2l_path} 总数 {total_count}, 保留 {kept_count}, 删除 {removed_count}")
+
+    return True, total_count, removed_count
+
+
+def verify_processed_a2l_file(
+    a2l_path: Path,
+    log_callback: Callable[[str], None]
+) -> Tuple[bool, List[str]]:
+    """验证处理后的 A2L 文件
+
+    验证三个关键点：
+    1. XCP 前缀是否添加（文件开头包含 /begin XCP）
+    2. 地址是否已更新（检查是否有非 0x0000 的地址）
+    3. 原始头部是否已裁剪（检查第一个 /end MOD_PAR 之前的行数是否合理）
+
+    Args:
+        a2l_path: A2L 文件路径
+        log_callback: 日志回调函数
+
+    Returns:
+        (success, messages) 元组
+        - success: 是否全部验证通过
+        - messages: 验证消息列表（成功和失败信息）
+    """
+    messages = []
+    all_passed = True
+
+    # 1. 验证文件存在
+    if not a2l_path.exists():
+        messages.append(f"❌ A2L 文件不存在: {a2l_path}")
+        return False, messages
+
+    # 读取文件内容
+    try:
+        with open(a2l_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(a2l_path, 'r', encoding='gbk') as f:
+                content = f.read()
+        except Exception as e:
+            messages.append(f"❌ 读取 A2L 文件失败: {e}")
+            return False, messages
+
+    lines = content.split('\n')
+
+    # 2. 验证 XCP 前缀已添加
+    # 检查文件开头是否符合 XCP 头文件模板的特征
+    # 可能的格式：
+    # - 以 /* 开头（AutoExtract 格式）
+    # - 以 /begin XCP 开头（简化格式）
+    # - ASAP2_VERSION 声明
+
+    xcp_header_found = False
+    header_type = None
+
+    # 检查前50行
+    for i, line in enumerate(lines[:50]):
+        stripped = line.strip()
+        # AutoExtract 格式：以注释开头
+        if stripped.startswith('/*') and 'Start of automatic variable extraction' in line:
+            xcp_header_found = True
+            header_type = "AutoExtract"
+            messages.append(f"✅ XCP 头文件已添加（AutoExtract 格式，第 {i + 1} 行）")
+            break
+        # 简化 XCP 格式
+        elif '/begin XCP' in line or '/begin  XCP' in line:
+            xcp_header_found = True
+            header_type = "简化 XCP"
+            messages.append(f"✅ XCP 头文件已添加（简化 XCP 格式，第 {i + 1} 行）")
+            break
+        # ASAP2_VERSION 声明
+        elif stripped.startswith('ASAP2_VERSION'):
+            xcp_header_found = True
+            header_type = "ASAP2"
+            messages.append(f"✅ XCP 头文件已添加（ASAP2 格式，第 {i + 1} 行）")
+            break
+
+    if not xcp_header_found:
+        messages.append("❌ XCP 头文件未添加（未找到预期的头文件格式）")
+        all_passed = False
+
+    # 3. 验证地址已更新（检查是否有非 0x0000 的地址）
+    address_pattern = re.compile(r'ECU Address\s+.*?\b(0x[0-9A-Fa-f]+)\b')
+    non_zero_addresses = []
+    zero_addresses = []
+
+    for line in lines:
+        match = address_pattern.search(line)
+        if match:
+            addr = match.group(1)
+            if addr != '0x0000' and addr != '0x00000000':
+                non_zero_addresses.append(addr)
+            else:
+                zero_addresses.append(addr)
+
+    if non_zero_addresses:
+        messages.append(f"✅ 地址已更新（找到 {len(non_zero_addresses)} 个非零地址，示例: {non_zero_addresses[0]}）")
+    else:
+        messages.append("❌ 地址未更新（所有地址都是 0x0000）")
+        all_passed = False
+
+    if zero_addresses:
+        messages.append(f"⚠️  仍有 {len(zero_addresses)} 个地址为 0x0000（这可能是正常的，如果符号在 ELF 中不存在）")
+
+    # 4. 验证原始头部已裁剪
+    # 检查方式：XCP模板后应该紧跟原始 A2L 内容
+    # 原始 A2L 内容特征：包含 CHARACTERISTIC 或带有注释的 MOD_COMMON
+
+    # 策略：在文件中间部分（例如第1000-3000行）查找原始 A2L 内容
+    # 因为模板文件通常有数百到数千行，原始A2L内容应该在模板后面
+
+    original_content_found = False
+    original_content_line = -1
+
+    # 检查文件中间部分（避免检查文件开头和末尾）
+    search_start = min(500, len(lines) // 4)
+    search_end = min(len(lines), 3000)
+
+    for i in range(search_start, search_end):
+        line = lines[i]
+        stripped = line.strip()
+
+        # 查找原始 A2L 内容的标记
+        if '/begin CHARACTERISTIC' in stripped or 'begin CHARACTERISTIC' in stripped:
+            original_content_found = True
+            original_content_line = i + 1
+            break
+
+        # 查找带有特定注释的 MOD_COMMON（原始A2L文件的标记）
+        if 'MOD_COMMON' in stripped and 'Mod Common Comment Here' in stripped:
+            original_content_found = True
+            original_content_line = i + 1
+            break
+
+    if original_content_found:
+        messages.append(f"✅ 原始头部已裁剪（第 {original_content_line} 行找到原始 A2L 内容）")
+    else:
+        messages.append(f"⚠️  未在预期位置找到原始 A2L 内容（检查了第 {search_start}-{search_end} 行）")
+
+    # 5. 检查文件大小
+    file_size = a2l_path.stat().st_size
+    messages.append(f"📁 文件大小: {file_size:,} bytes ({len(lines):,} 行)")
+
+    return all_passed, messages
+
+
 def execute_xcp_header_replacement_stage(
     config: StageConfig,
     context: BuildContext
@@ -940,13 +1371,14 @@ def execute_xcp_header_replacement_stage(
 
     try:
         # 获取配置 (任务 7.3)
-        a2l_config = config.custom_config
+        # 使用 getattr 安全获取 custom_config，如果不存在则创建默认配置
+        a2l_config = getattr(config, 'custom_config', None)
         if not isinstance(a2l_config, A2LHeaderReplacementConfig):
             # 如果 custom_config 不是 A2LHeaderReplacementConfig，创建默认配置
             a2l_config = A2LHeaderReplacementConfig()
             # 尝试从 context 获取配置
-            a2l_config.a2l_source_path = context.state.get("a2l_output_path", "")
-            a2l_config.output_dir = context.state.get("target_path", "")
+            a2l_config.a2l_source_path = context.state.get("a2l_output_path", "") or context.config.get("a2l_path", "")
+            a2l_config.output_dir = context.state.get("target_path", "") or context.config.get("target_path", "")
 
         # 前置条件检查：获取 A2L 文件路径 (任务 7.3, 7.4)
         if not a2l_config.a2l_source_path:

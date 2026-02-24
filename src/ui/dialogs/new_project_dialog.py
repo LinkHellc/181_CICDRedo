@@ -3,10 +3,10 @@
 This module implements the new project configuration dialog
 following Architecture Decision 3.1 (PyQt6 UI Patterns).
 
-Updated with Anthropic Brand Theme (v3.0 - 2026-02-07)
-- Anthropic 品牌配色（橙色系）
-- Poppins/Lora 字体系统
-- 智能 fallback 机制
+Updated with Industrial Precision Theme (v4.0 - 2026-02-24)
+- 响应式布局优化
+- 按钮尺寸适配
+- 工业精密美学
 """
 
 import logging
@@ -23,6 +23,8 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QScrollArea,
+    QWidget,
+    QSizePolicy,
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QFont
@@ -37,27 +39,18 @@ logger = logging.getLogger(__name__)
 
 
 class NewProjectDialog(QDialog):
-    """新建项目配置对话框 - 现代化设计
-
-    遵循 PyQt6 类模式，使用信号槽通信。
+    """新建项目配置对话框 - 工业精密风格
 
     设计理念：
-    - 清晰的表单布局
-    - 智能路径检测
-    - 实时验证反馈
-    - 友好的错误提示
-
-    Architecture Decision 3.1:
-    - 继承 QDialog
-    - 使用 pyqtSignal 进行事件通信
-    - 跨线程信号使用 Qt.ConnectionType.QueuedConnection
+    - 响应式布局，按钮不会超出边框
+    - 清晰的视觉层次
+    - 紧凑但舒适的间距
+    - 工业控制面板美学
     """
 
-    # 定义信号：配置保存成功时发射
-    config_saved = pyqtSignal(str)  # 参数：配置文件名
-    config_updated = pyqtSignal(str)  # 参数：配置文件名（编辑模式）
+    config_saved = pyqtSignal(str)
+    config_updated = pyqtSignal(str)
 
-    # 图标映射
     FIELD_ICONS = {
         "name": "📋",
         "simulink_path": "📊",
@@ -65,241 +58,349 @@ class NewProjectDialog(QDialog):
         "a2l_path": "📝",
         "target_path": "🎯",
         "iar_project_path": "🔧",
+        "a2l_tool_path": "🛠️",
     }
 
     def __init__(self, parent=None, edit_mode: bool = False):
-        """初始化对话框
-
-        Args:
-            parent: 父窗口
-            edit_mode: 是否为编辑模式（默认 False）
-        """
         super().__init__(parent)
         self._edit_mode = edit_mode
-        self._original_project_name = ""  # 编辑模式时保存原始项目名
+        self._original_project_name = ""
 
-        # 根据模式设置标题
         title = "✏️ 编辑项目配置" if edit_mode else "➕ 新建项目配置"
         self.setWindowTitle(title)
-        self.setMinimumWidth(700)
-        self.setMinimumHeight(600)
 
-        # 应用主题样式
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #16213e;
-            }
-        """)
+        # 优化窗口尺寸 - 确保按钮不会超出
+        self.setMinimumSize(800, 650)
+        self.resize(850, 700)
 
-        # 初始化 UI
+        # 工业精密风格样式
+        self.setStyleSheet(self._get_stylesheet())
+
         self._init_ui()
 
+    def _get_stylesheet(self) -> str:
+        """获取工业精密风格样式表"""
+        return """
+            QDialog {
+                background-color: #0f172a;
+            }
+
+            QFrame {
+                background-color: transparent;
+            }
+
+            QFrame#card {
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 8px;
+            }
+
+            QFrame#fieldCard {
+                background-color: rgba(30, 41, 59, 0.5);
+                border: 1px solid #334155;
+                border-radius: 6px;
+            }
+
+            QLabel#title {
+                color: #f8fafc;
+                font-size: 22px;
+                font-weight: 700;
+            }
+
+            QLabel#desc {
+                color: #64748b;
+                font-size: 13px;
+            }
+
+            QLabel#label {
+                color: #cbd5e1;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            QLabel#hint {
+                color: #475569;
+                font-size: 11px;
+            }
+
+            QLabel#required {
+                color: #f97316;
+                font-size: 11px;
+            }
+
+            QLineEdit {
+                background-color: #0f172a;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 10px 14px;
+                color: #f1f5f9;
+                font-size: 13px;
+                selection-background-color: #f97316;
+            }
+
+            QLineEdit:hover {
+                border-color: #475569;
+            }
+
+            QLineEdit:focus {
+                border-color: #f97316;
+                background-color: #1e293b;
+            }
+
+            QLineEdit:read-only {
+                background-color: rgba(15, 23, 42, 0.5);
+                color: #64748b;
+                border-style: dashed;
+            }
+
+            QPushButton {
+                background-color: #334155;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 16px;
+                color: #e2e8f0;
+                font-size: 13px;
+                font-weight: 500;
+            }
+
+            QPushButton:hover {
+                background-color: #475569;
+            }
+
+            QPushButton:pressed {
+                background-color: #64748b;
+            }
+
+            QPushButton#primary {
+                background-color: #f97316;
+                color: #0f172a;
+                font-weight: 600;
+            }
+
+            QPushButton#primary:hover {
+                background-color: #fb923c;
+            }
+
+            QPushButton#primary:pressed {
+                background-color: #ea580c;
+            }
+
+            QPushButton#browse {
+                background-color: #1e40af;
+                min-width: 70px;
+            }
+
+            QPushButton#browse:hover {
+                background-color: #1d4ed8;
+            }
+
+            QPushButton#detect {
+                background-color: #047857;
+                min-width: 36px;
+                max-width: 36px;
+            }
+
+            QPushButton#detect:hover {
+                background-color: #059669;
+            }
+
+            QPushButton#detectAll {
+                background-color: #7c3aed;
+            }
+
+            QPushButton#detectAll:hover {
+                background-color: #8b5cf6;
+            }
+
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+
+            QScrollBar:vertical {
+                background-color: #1e293b;
+                width: 10px;
+                border-radius: 5px;
+            }
+
+            QScrollBar::handle:vertical {
+                background-color: #475569;
+                border-radius: 5px;
+                min-height: 30px;
+            }
+
+            QScrollBar::handle:vertical:hover {
+                background-color: #64748b;
+            }
+
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """
+
     def _init_ui(self):
-        """初始化 UI 组件 - 现代化表单布局"""
-        # 主布局
+        """初始化 UI - 优化后的响应式布局"""
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(32, 32, 32, 32)
+        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(24, 24, 24, 24)
 
         # ===== 标题区域 =====
-        title_card = QFrame()
-        title_card.setProperty("elevated", True)
-        title_layout = QVBoxLayout(title_card)
-        title_layout.setContentsMargins(24, 20, 24, 20)
+        header = self._create_header()
+        main_layout.addWidget(header)
 
-        title = QLabel("📋 项目配置")
-        title.setProperty("heading", True)
-        title.setStyleSheet("font-size: 24px; font-weight: 700; color: #f1f5f9;")
-        title_layout.addWidget(title)
-
-        desc = QLabel("填写以下信息以创建新的项目配置")
-        desc.setStyleSheet("color: #94a3b8; font-size: 13px;")
-        title_layout.addWidget(desc)
-
-        main_layout.addWidget(title_card)
-
-        # ===== 表单区域（使用滚动支持小屏幕） =====
+        # ===== 表单区域 =====
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         form_widget = QWidget()
         form_layout = QVBoxLayout(form_widget)
-        form_layout.setSpacing(16)
-        form_layout.setContentsMargins(0, 0, 0, 0)
+        form_layout.setSpacing(12)
+        form_layout.setContentsMargins(0, 0, 8, 0)
 
-        # 项目名称输入字段
+        # 项目名称
         form_layout.addWidget(self._create_name_field())
 
         # 分隔线
-        sep = QLabel("─" * 80)
-        sep.setStyleSheet("color: rgba(255, 255, 255, 0.1);")
-        form_layout.addWidget(sep)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet("background-color: #334155; max-height: 1px;")
+        form_layout.addWidget(separator)
 
-        # 路径配置字段
+        # 路径字段
         path_fields = [
             ("simulink_path", "Simulink 工程路径"),
             ("matlab_code_path", "MATLAB 代码路径"),
             ("a2l_path", "A2L 文件路径"),
             ("target_path", "目标文件路径"),
             ("iar_project_path", "IAR 工程路径"),
+            ("a2l_tool_path", "A2L 工具路径"),
         ]
 
         self.path_inputs: dict[str, QLineEdit] = {}
         for field_key, label_text in path_fields:
             form_layout.addWidget(self._create_path_field(field_key, label_text))
 
-        # 自动检测按钮区域
-        detect_card = QFrame()
-        detect_card.setProperty("elevated", True)
-        detect_layout = QHBoxLayout(detect_card)
-        detect_layout.setContentsMargins(20, 16, 20, 16)
+        # 智能检测区域
+        form_layout.addWidget(self._create_detect_section())
 
-        detect_layout.addStretch()
-
-        detect_all_btn = QPushButton("🔍 智能检测所有路径")
-        detect_all_btn.setProperty("success", True)
-        detect_all_btn.setMinimumHeight(44)
-        detect_all_btn.setToolTip("自动扫描并填充 MATLAB 和 IAR 安装路径")
-        detect_all_btn.clicked.connect(self._auto_detect_all_paths)
-        detect_layout.addWidget(detect_all_btn)
-
-        detect_layout.addStretch()
-
-        form_layout.addWidget(detect_card)
         form_layout.addStretch()
-
         scroll.setWidget(form_widget)
         main_layout.addWidget(scroll, 1)
 
-        # ===== 按钮区域 =====
-        button_card = QFrame()
-        button_layout = QHBoxLayout(button_card)
-        button_layout.setContentsMargins(0, 16, 0, 0)
-        button_layout.setSpacing(12)
+        # ===== 底部按钮 =====
+        main_layout.addWidget(self._create_button_bar())
 
-        button_layout.addStretch()
+    def _create_header(self) -> QFrame:
+        """创建标题区域"""
+        header = QFrame()
+        header.setObjectName("card")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(20, 16, 20, 16)
+        header_layout.setSpacing(6)
 
-        cancel_btn = QPushButton("取消")
-        cancel_btn.setMinimumHeight(44)
-        cancel_btn.setMinimumWidth(120)
-        cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_btn)
+        title = QLabel("📋 项目配置")
+        title.setObjectName("title")
+        header_layout.addWidget(title)
 
-        save_btn = QPushButton("💾 保存配置")
-        save_btn.setProperty("primary", True)
-        save_btn.setMinimumHeight(44)
-        save_btn.setMinimumWidth(140)
-        save_btn.clicked.connect(self._save_config)
-        button_layout.addWidget(save_btn)
+        desc_text = "修改项目配置信息" if self._edit_mode else "填写以下信息创建新的项目配置"
+        desc = QLabel(desc_text)
+        desc.setObjectName("desc")
+        header_layout.addWidget(desc)
 
-        main_layout.addWidget(button_card)
+        return header
 
     def _create_name_field(self) -> QFrame:
         """创建项目名称输入字段"""
-        field = QFrame()
-        layout = QVBoxLayout(field)
+        card = QFrame()
+        card.setObjectName("fieldCard")
+        layout = QVBoxLayout(card)
         layout.setSpacing(8)
+        layout.setContentsMargins(16, 12, 16, 12)
 
         # 标签行
         label_row = QHBoxLayout()
+        label_row.setSpacing(8)
+
         icon = QLabel(self.FIELD_ICONS["name"])
         label_row.addWidget(icon)
 
         label = QLabel("项目名称")
-        label.setStyleSheet("font-weight: 600; color: #cbd5e1;")
+        label.setObjectName("label")
         label_row.addWidget(label)
 
         label_row.addStretch()
 
-        # 编辑模式提示
-        if self._edit_mode:
-            hint = QLabel("(编辑模式不可更改)")
-            hint.setStyleSheet("color: #f59e0b; font-size: 12px;")
-            label_row.addWidget(hint)
-
         layout.addLayout(label_row)
 
-        # 输入框
+        # 输入框 - 编辑模式也可修改
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("例如：MyProject_2024")
-        self.name_input.setMinimumHeight(48)
-        if self._edit_mode:
-            self.name_input.setReadOnly(True)
-            self.name_input.setStyleSheet("""
-                QLineEdit[readOnly="true"] {
-                    background-color: rgba(255, 255, 255, 0.03);
-                    color: #94a3b8;
-                }
-            """)
         layout.addWidget(self.name_input)
 
         # 帮助文本
-        help_text = QLabel("💡 项目名称将用于标识配置文件，支持中文、英文、数字和下划线")
-        help_text.setStyleSheet("color: #64748b; font-size: 12px;")
+        help_text = QLabel("💡 项目名称用于标识配置文件，支持中文、英文、数字和下划线")
+        help_text.setObjectName("hint")
         layout.addWidget(help_text)
 
-        return field
+        return card
 
     def _create_path_field(self, field_key: str, label_text: str) -> QFrame:
-        """创建路径输入字段
-
-        Args:
-            field_key: 字段键名
-            label_text: 标签文本
-
-        Returns:
-            配置好的 QFrame
-        """
-        field = QFrame()
-        layout = QVBoxLayout(field)
+        """创建路径输入字段 - 优化按钮布局"""
+        card = QFrame()
+        card.setObjectName("fieldCard")
+        layout = QVBoxLayout(card)
         layout.setSpacing(8)
+        layout.setContentsMargins(16, 12, 16, 12)
 
         # 标签行
         label_row = QHBoxLayout()
+        label_row.setSpacing(8)
+
         icon = QLabel(self.FIELD_ICONS.get(field_key, "📁"))
         label_row.addWidget(icon)
 
         label = QLabel(label_text)
-        label.setStyleSheet("font-weight: 600; color: #cbd5e1;")
+        label.setObjectName("label")
         label_row.addWidget(label)
 
         label_row.addStretch()
 
-        # 必填标记
         required = QLabel("* 必填")
-        required.setStyleSheet("color: #ef4444; font-size: 12px;")
+        required.setObjectName("required")
         label_row.addWidget(required)
 
         layout.addLayout(label_row)
 
-        # 输入和按钮行
+        # 输入和按钮行 - 优化比例
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
 
-        # 输入框
+        # 输入框 - 占据大部分空间
         input_field = QLineEdit()
-        input_field.setPlaceholderText(f"点击浏览按钮选择{label_text}...")
-        input_field.setMinimumHeight(44)
+        input_field.setPlaceholderText(f"点击浏览选择或手动输入路径...")
         input_row.addWidget(input_field, 1)
 
-        # 浏览按钮
-        browse_btn = QPushButton("📂 浏览")
-        browse_btn.setMinimumHeight(44)
-        browse_btn.setMinimumWidth(90)
+        # 浏览按钮 - 固定宽度
+        browse_btn = QPushButton("📂")
+        browse_btn.setObjectName("browse")
+        browse_btn.setToolTip("浏览选择路径")
+        browse_btn.setFixedWidth(44)
+        browse_btn.setFixedHeight(40)
         browse_btn.clicked.connect(
             lambda checked, key=field_key, inp=input_field: self._browse_folder(key, inp)
         )
         input_row.addWidget(browse_btn)
 
-        # 自动检测按钮（仅针对 MATLAB 和 IAR 路径）
+        # 自动检测按钮（仅针对 MATLAB 和 IAR）
         if field_key in ("matlab_code_path", "iar_project_path"):
             detect_key = "matlab" if field_key == "matlab_code_path" else "iar"
             detect_btn = QPushButton("🔍")
-            detect_btn.setMinimumHeight(44)
-            detect_btn.setMinimumWidth(50)
+            detect_btn.setObjectName("detect")
             detect_btn.setToolTip(f"自动检测{label_text}")
+            detect_btn.setFixedHeight(40)
             detect_btn.clicked.connect(
                 lambda checked, key=detect_key, inp=input_field: self._auto_detect_single_path(
                     key, inp
@@ -312,17 +413,65 @@ class NewProjectDialog(QDialog):
         # 保存引用
         self.path_inputs[field_key] = input_field
 
-        return field
+        return card
+
+    def _create_detect_section(self) -> QFrame:
+        """创建智能检测区域"""
+        card = QFrame()
+        card.setObjectName("card")
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(20, 14, 20, 14)
+
+        # 左侧说明
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(2)
+
+        info_title = QLabel("🔧 智能路径检测")
+        info_title.setStyleSheet("color: #f8fafc; font-weight: 600; font-size: 13px;")
+        info_layout.addWidget(info_title)
+
+        info_desc = QLabel("自动扫描系统中的 MATLAB 和 IAR 安装路径")
+        info_desc.setStyleSheet("color: #64748b; font-size: 11px;")
+        info_layout.addWidget(info_desc)
+
+        layout.addLayout(info_layout)
+        layout.addStretch()
+
+        # 检测按钮
+        detect_all_btn = QPushButton("🔍 一键检测")
+        detect_all_btn.setObjectName("detectAll")
+        detect_all_btn.setFixedHeight(38)
+        detect_all_btn.clicked.connect(self._auto_detect_all_paths)
+        layout.addWidget(detect_all_btn)
+
+        return card
+
+    def _create_button_bar(self) -> QFrame:
+        """创建底部按钮栏"""
+        bar = QFrame()
+        bar.setObjectName("card")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(20, 14, 20, 14)
+        layout.setSpacing(12)
+
+        layout.addStretch()
+
+        cancel_btn = QPushButton("取 消")
+        cancel_btn.setFixedSize(100, 40)
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(cancel_btn)
+
+        save_btn = QPushButton("💾 保存配置")
+        save_btn.setObjectName("primary")
+        save_btn.setFixedSize(120, 40)
+        save_btn.clicked.connect(self._save_config)
+        layout.addWidget(save_btn)
+
+        return bar
 
     def _browse_folder(self, field_key: str, input_field: QLineEdit):
-        """根据字段类型选择文件或目录
-
-        Args:
-            field_key: 字段键名
-            input_field: 输入框控件
-        """
+        """浏览选择文件或目录"""
         if field_key == "iar_project_path":
-            # IAR工程是文件，不是目录
             file, _ = QFileDialog.getOpenFileName(
                 self,
                 "选择 IAR 工程文件",
@@ -331,37 +480,37 @@ class NewProjectDialog(QDialog):
             )
             if file:
                 input_field.setText(file)
-                self._mark_field_validated(input_field, True)
+        elif field_key == "a2l_path":
+            # A2L 路径应该是文件
+            file, _ = QFileDialog.getOpenFileName(
+                self,
+                "选择 A2L 文件",
+                "",
+                "A2L 文件 (*.a2l);;所有文件 (*.*)"
+            )
+            if file:
+                input_field.setText(file)
         else:
-            # 其他路径是目录
             folder = QFileDialog.getExistingDirectory(
                 self,
-                f"选择 {field_key.replace('_', ' ').title()} 文件夹",
+                f"选择文件夹",
                 "",
                 QFileDialog.Option.ShowDirsOnly
             )
             if folder:
                 input_field.setText(folder)
-                self._mark_field_validated(input_field, True)
 
     def _mark_field_validated(self, input_field: QLineEdit, valid: bool):
-        """标记字段验证状态（视觉效果）
-
-        Args:
-            input_field: 输入框控件
-            valid: 是否有效
-        """
+        """标记字段验证状态"""
         if valid:
-            input_field.setProperty("auto-detected", True)
+            input_field.setStyleSheet(
+                "QLineEdit { border-color: #22c55e; background-color: rgba(34, 197, 94, 0.1); }"
+            )
         else:
-            input_field.setProperty("auto-detected", False)
+            input_field.setStyleSheet("")
 
     def set_config(self, config: ProjectConfig):
-        """加载现有配置到 UI 字段（编辑模式）
-
-        Args:
-            config: 要加载的配置对象
-        """
+        """加载现有配置到 UI 字段"""
         self._original_project_name = config.name
         self.name_input.setText(config.name)
         self.path_inputs["simulink_path"].setText(config.simulink_path)
@@ -369,31 +518,28 @@ class NewProjectDialog(QDialog):
         self.path_inputs["a2l_path"].setText(config.a2l_path)
         self.path_inputs["target_path"].setText(config.target_path)
         self.path_inputs["iar_project_path"].setText(config.iar_project_path)
+        self.path_inputs["a2l_tool_path"].setText(getattr(config, 'a2l_tool_path', ''))
 
     def _validate_paths(self) -> list[str]:
-        """验证所有路径已填写且存在
-
-        Returns:
-            错误列表，空列表表示有效
-        """
+        """验证所有路径已填写且存在"""
         errors = []
 
-        # 创建临时配置对象进行验证
-        try:
-            temp_config = ProjectConfig(
-                simulink_path=self.path_inputs["simulink_path"].text(),
-                matlab_code_path=self.path_inputs["matlab_code_path"].text(),
-                a2l_path=self.path_inputs["a2l_path"].text(),
-                target_path=self.path_inputs["target_path"].text(),
-                iar_project_path=self.path_inputs["iar_project_path"].text(),
-            )
+        # 只验证路径字段，项目名称单独处理
+        path_fields = [
+            ("simulink_path", "Simulink 工程路径"),
+            ("matlab_code_path", "MATLAB 代码路径"),
+            ("a2l_path", "A2L 文件路径"),
+            ("target_path", "目标文件路径"),
+            ("iar_project_path", "IAR 工程路径"),
+            ("a2l_tool_path", "A2L 工具路径"),
+        ]
 
-            # 复用 ProjectConfig 的验证方法
-            errors = temp_config.validate_required_fields()
-        except Exception as e:
-            errors.append(f"配置验证失败: {str(e)}")
+        for field_key, field_name in path_fields:
+            value = self.path_inputs[field_key].text().strip()
+            if not value:
+                errors.append(f"{field_name} 不能为空")
 
-        # 额外检查路径是否存在
+        # 检查路径是否存在
         for field_key, input_field in self.path_inputs.items():
             path_str = input_field.text().strip()
             if path_str:
@@ -404,14 +550,7 @@ class NewProjectDialog(QDialog):
         return errors
 
     def _save_config(self):
-        """保存配置（增强版：包含覆盖检测和文件名清理）
-
-        项目名称获取逻辑：
-        1. 优先使用用户手动输入的项目名称
-        2. 如果用户未输入，自动从 Simulink 工程路径提取目录名作为项目名称
-        3. 清理文件名中的非法字符（使用 sanitize_filename）
-        """
-        # 验证路径
+        """保存配置"""
         errors = self._validate_paths()
         if errors:
             QMessageBox.warning(
@@ -421,30 +560,23 @@ class NewProjectDialog(QDialog):
             )
             return
 
-        # 获取项目名称
-        if self._edit_mode:
-            # 编辑模式：使用原始项目名称
-            filename = self._original_project_name
-        else:
-            # 新建模式：获取并清理项目名称
-            raw_name = self.name_input.text().strip()
-            if not raw_name:
-                # 如果用户没有输入项目名称，从 Simulink 路径自动提取
-                simulink_path = self.path_inputs["simulink_path"].text()
-                raw_name = Path(simulink_path).name
+        # 统一从输入框获取项目名称
+        raw_name = self.name_input.text().strip()
+        if not raw_name:
+            # 如果用户没有输入项目名称，从 Simulink 路径自动提取
+            simulink_path = self.path_inputs["simulink_path"].text()
+            raw_name = Path(simulink_path).name
 
-            # 清理文件名（使用 sanitize_filename）
-            filename = sanitize_filename(raw_name)
+        filename = sanitize_filename(raw_name)
 
-            if not filename or filename == "unnamed_project":
-                QMessageBox.warning(
-                    self,
-                    "⚠️ 无效的项目名称",
-                    "项目名称不能为空或仅包含非法字符。\n\n请输入有效的项目名称。"
-                )
-                return
+        if not filename or filename == "unnamed_project":
+            QMessageBox.warning(
+                self,
+                "⚠️ 无效的项目名称",
+                "项目名称不能为空或仅包含非法字符。"
+            )
+            return
 
-        # 创建配置对象
         config = ProjectConfig(
             name=filename,
             simulink_path=self.path_inputs["simulink_path"].text(),
@@ -452,55 +584,49 @@ class NewProjectDialog(QDialog):
             a2l_path=self.path_inputs["a2l_path"].text(),
             target_path=self.path_inputs["target_path"].text(),
             iar_project_path=self.path_inputs["iar_project_path"].text(),
+            a2l_tool_path=self.path_inputs["a2l_tool_path"].text(),
         )
 
-        # 保存配置
         try:
             if self._edit_mode:
-                # 编辑模式：调用 update_config
-                if update_config(filename, config):
-                    QMessageBox.information(
-                        self,
-                        "✅ 更新成功",
-                        f"配置已更新：{filename}"
-                    )
+                # 编辑模式：检查是否重命名
+                name_changed = (filename != self._original_project_name)
+
+                if name_changed:
+                    # 项目名称改变，需要删除旧配置并保存新配置
+                    from core.config import delete_config
+                    delete_config(self._original_project_name)
+
+                if save_config(config, filename, overwrite=True):
+                    QMessageBox.information(self, "✅ 更新成功", f"配置已保存：{filename}")
                     logger.info(f"配置已更新: {filename}")
                     self.config_updated.emit(filename)
                     self.accept()
                 else:
-                    QMessageBox.critical(
-                        self,
-                        "❌ 更新失败",
-                        "配置更新失败，请查看日志。"
-                    )
+                    QMessageBox.critical(self, "❌ 更新失败", "配置保存失败，请查看日志。")
             else:
-                # 新建模式：检查配置是否已存在
                 if config_exists(filename):
                     reply = QMessageBox.question(
                         self,
                         "📋 配置已存在",
-                        f"配置文件 '{filename}' 已存在。\n\n是否覆盖现有配置？",
+                        f"配置文件 '{filename}' 已存在。\n\n是否覆盖？",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.No
                     )
                     if reply == QMessageBox.StandardButton.No:
-                        return  # 用户选择不覆盖
+                        return
 
                 if save_config(config, filename, overwrite=True):
                     QMessageBox.information(
                         self,
                         "✅ 保存成功",
-                        f"配置已保存：{filename}\n\n您现在可以从主窗口选择此项目开始工作。"
+                        f"配置已保存：{filename}\n\n您现在可以从主窗口选择此项目。"
                     )
                     logger.info(f"配置已保存: {filename}")
                     self.config_saved.emit(filename)
                     self.accept()
                 else:
-                    QMessageBox.critical(
-                        self,
-                        "❌ 保存失败",
-                        "配置保存失败，请查看日志。\n\n可能原因：\n• 磁盘空间不足\n• 权限不足"
-                    )
+                    QMessageBox.critical(self, "❌ 保存失败", "配置保存失败，请查看日志。")
 
         except Exception as e:
             QMessageBox.critical(
@@ -510,12 +636,7 @@ class NewProjectDialog(QDialog):
             )
 
     def _auto_detect_single_path(self, detect_key: str, input_field: QLineEdit):
-        """检测单个路径
-
-        Args:
-            detect_key: 检测类型 ("matlab" 或 "iar")
-            input_field: 要填充的输入框控件
-        """
+        """检测单个路径"""
         from utils.path_detector import detect_matlab_installations, detect_iar_installations
 
         detected_path = None
@@ -532,12 +653,11 @@ class NewProjectDialog(QDialog):
             QMessageBox.information(
                 self,
                 "🔍 未检测到安装",
-                f"未能自动检测到 {'MATLAB' if detect_key == 'matlab' else 'IAR'} 安装。\n\n"
-                f"请手动指定路径或检查软件是否已正确安装。"
+                f"未能自动检测到 {'MATLAB' if detect_key == 'matlab' else 'IAR'} 安装。"
             )
 
     def _auto_detect_all_paths(self):
-        """检测所有路径（MATLAB 和 IAR）"""
+        """检测所有路径"""
         results = auto_detect_paths()
 
         detected_count = 0
@@ -555,18 +675,12 @@ class NewProjectDialog(QDialog):
             QMessageBox.information(
                 self,
                 "✅ 检测完成",
-                f"成功检测到 {detected_count} 个工具路径！\n\n"
-                f"检测到的路径已用绿色边框标注。\n\n"
-                f"请确认路径是否正确，然后点击保存。"
+                f"成功检测到 {detected_count} 个工具路径！"
             )
             logger.info(f"自动检测完成，检测到 {detected_count} 个工具路径")
         else:
             QMessageBox.warning(
                 self,
                 "⚠️ 未检测到安装",
-                "未能自动检测到任何工具安装。\n\n"
-                "请手动指定所有路径，或确认：\n"
-                "• MATLAB/IAR 已正确安装\n"
-                "• 安装路径在常见位置\n"
-                "• 具有读取权限"
+                "未能自动检测到任何工具安装。"
             )

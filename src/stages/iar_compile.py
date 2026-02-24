@@ -227,23 +227,23 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
         )
 
         # 检查 iarbuild.exe 是否可用 (Story 2.8 - 任务 6.2)
-        if not iar._check_iarbuild_available():
+        if not iar.is_available():
             return StageResult(
                 status=StageStatus.FAILED,
-                message="IAR 编译器未找到: iarbuild.exe",
+                message="IAR 编译器未找到: IarBuild.exe",
                 error=ProcessError(
                     "IAR",
-                    "IAR 编译器未找到: iarbuild.exe",
+                    "IAR 编译器未找到: IarBuild.exe",
                     suggestions=[
                         "检查 IAR Embedded Workbench 是否正确安装",
                         "验证 IAR 安装目录是否在 PATH 环境变量中",
-                        "手动指定 iarbuild.exe 的完整路径"
+                        "手动指定 IarBuild.exe 的完整路径"
                     ]
                 ),
                 suggestions=[
                     "检查 IAR Embedded Workbench 是否正确安装",
                     "验证 IAR 安装目录是否在 PATH 环境变量中",
-                    "手动指定 iarbuild.exe 的完整路径"
+                    "手动指定 IarBuild.exe 的完整路径"
                 ]
             )
 
@@ -275,23 +275,63 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
                     "增加超时配置"
                 ]
             )
-        except ProcessExitCodeError as e:
-            # 处理编译退出码非零 (Story 2.8 - 任务 6.4)
-            logger.error(f"IAR 编译失败: {e}")
+        except Exception as e:
+            # 处理其他异常
+            logger.error(f"IAR 编译异常: {e}")
             context.log(f"错误: {e}")
 
             return StageResult(
                 status=StageStatus.FAILED,
-                message=f"IAR 编译失败 (退出码: {e.exit_code})",
+                message=f"IAR 编译异常: {str(e)}",
                 error=e,
                 suggestions=[
                     "查看编译日志",
-                    "修复语法错误",
+                    "检查 IAR 安装"
+                ]
+            )
+
+        # 检查编译结果
+        if not compile_result.get("success", False):
+            # 编译失败
+            exit_code = compile_result.get("exit_code", -1)
+            output = compile_result.get("output", "")
+            errors = compile_result.get("errors", [])
+
+            context.log(f"IAR 编译失败 (退出码: {exit_code})")
+
+            # 显示错误摘要
+            if errors:
+                context.log("IAR 编译错误摘要:")
+                for err in errors[:10]:
+                    context.log(f"  [{err.get('code', '?')}] {err.get('message', '')}")
+            elif output:
+                # 从输出中提取错误行
+                error_lines = []
+                for line in output.split('\n')[-30:]:
+                    line = line.strip()
+                    if line and ('error' in line.lower() or 'failed' in line.lower()):
+                        error_lines.append(line)
+                if error_lines:
+                    context.log("IAR 编译错误摘要:")
+                    for err_line in error_lines[:10]:
+                        context.log(f"  {err_line}")
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=f"IAR 编译失败 (退出码: {exit_code})",
+                suggestions=[
+                    "查看编译日志",
+                    "修复编译错误",
                     "检查链接配置"
                 ]
             )
 
-        context.log(f"IAR 编译完成，耗时: {compile_result['execution_time']:.2f} 秒")
+        # 编译成功（可能包含警告）
+        warnings = compile_result.get("warnings", [])
+        if warnings:
+            context.log(f"IAR 编译完成（有 {len(warnings)} 个警告），耗时: {compile_result['execution_time']:.2f} 秒")
+        else:
+            context.log(f"IAR 编译完成，耗时: {compile_result['execution_time']:.2f} 秒")
 
         # 验证 ELF 文件 (Story 2.8 - 任务 2.1-2.2)
         context.log("验证 ELF 文件...")
@@ -380,28 +420,12 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
             else:
                 context.log("未找到 HexMerge.bat，跳过 HEX 文件生成")
 
-        # 检查编译错误 (Story 2.8 - 任务 4.6, 3.1-3.4)
-        errors = compile_result.get("errors", [])
+        # 显示警告（如果有）
         warnings = compile_result.get("warnings", [])
-
-        if errors:
-            # 生成错误报告
-            error_report = iar.get_error_report(errors)
-            context.log(f"\n{error_report}")
-
-            return StageResult(
-                status=StageStatus.FAILED,
-                message=f"IAR 编译发现 {len(errors)} 个错误",
-                suggestions=[
-                    "查看错误报告获取详细信息",
-                    "修复错误后重新编译"
-                ]
-            )
-
         if warnings:
             context.log(f"\n编译警告: {len(warnings)} 个")
             for warning in warnings[:5]:  # 最多显示 5 条警告
-                context.log(f"  [{warning['code']}] {warning['message']}")
+                context.log(f"  [{warning.get('code', '?')}] {warning.get('message', '')}")
 
         # 构建编译输出状态 (Story 2.8 - 任务 4.5)
         build_output = {

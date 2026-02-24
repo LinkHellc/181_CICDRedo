@@ -505,14 +505,44 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
         base_dir_str = matlab_output.get("base_dir", "")
 
         if not base_dir_str:
-            return StageResult(
-                status=StageStatus.FAILED,
-                message="MATLAB 输出目录未找到",
-                suggestions=[
-                    "确保 MATLAB 代码生成阶段已完成",
-                    "检查 context.state['matlab_output'] 是否存在"
+            # 如果跳过了 matlab_gen 阶段，尝试从 simulink_path 推断输出目录
+            simulink_path = context.config.get("simulink_path", "")
+            if simulink_path:
+                # 尝试多个可能的代码目录（优先使用有文件的目录）
+                possible_dirs = [
+                    Path(simulink_path) / "20_Code",
+                    Path(simulink_path) / "20-Code",
+                    Path(simulink_path) / "20_Code.bak",  # 备份目录
                 ]
-            )
+
+                for candidate_dir in possible_dirs:
+                    if candidate_dir.exists():
+                        # 检查目录中是否有 .c 或 .h 文件
+                        c_files = list(candidate_dir.rglob("*.c"))
+                        h_files = list(candidate_dir.rglob("*.h"))
+                        if c_files or h_files:
+                            base_dir_str = str(candidate_dir)
+                            context.log(f"自动检测到 MATLAB 输出目录: {base_dir_str}")
+                            context.log(f"找到 {len(c_files)} 个 .c 文件, {len(h_files)} 个 .h 文件")
+                            break
+
+                # 如果上述目录都没有文件，使用 20_Code（即使为空，后面会报错提示）
+                if not base_dir_str:
+                    for candidate_dir in possible_dirs[:-1]:  # 排除 .bak
+                        if candidate_dir.exists():
+                            base_dir_str = str(candidate_dir)
+                            context.log(f"使用代码目录: {base_dir_str}")
+                            break
+
+            if not base_dir_str:
+                return StageResult(
+                    status=StageStatus.FAILED,
+                    message="MATLAB 输出目录未找到",
+                    suggestions=[
+                        "确保 MATLAB 代码生成阶段已完成，或检查 ./20_Code 目录是否存在",
+                        "检查 simulink_path 配置是否正确"
+                    ]
+                )
 
         base_dir = Path(base_dir_str)
 

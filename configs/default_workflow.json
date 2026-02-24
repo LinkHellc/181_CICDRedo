@@ -3,11 +3,12 @@
     {
       "id": "full_pipeline",
       "name": "完整流程",
-      "description": "包含所有 5 个阶段的完整构建流程",
-      "estimated_time": 15,
+      "description": "包含所有 6 个阶段的完整构建流程",
+      "estimated_time": 20,
       "stages": [
         {"name": "matlab_gen", "enabled": true, "timeout": 1800},
         {"name": "file_process", "enabled": true, "timeout": 300},
+        {"name": "file_move", "enabled": true, "timeout": 300},
         {"name": "iar_compile", "enabled": true, "timeout": 1200},
         {"name": "a2l_process", "enabled": true, "timeout": 600},
         {"name": "package", "enabled": true, "timeout": 60}
@@ -17,23 +18,11 @@
       "id": "quick_compile",
       "name": "快速编译",
       "description": "跳过 A2L 更新，仅执行代码生成和编译",
-      "estimated_time": 10,
+      "estimated_time": 15,
       "stages": [
         {"name": "matlab_gen", "enabled": true, "timeout": 1800},
         {"name": "file_process", "enabled": true, "timeout": 300},
-        {"name": "iar_compile", "enabled": true, "timeout": 1200},
-        {"name": "a2l_process", "enabled": false, "timeout": 600},
-        {"name": "package", "enabled": true, "timeout": 60}
-      ]
-    },
-    {
-      "id": "skip_a2l",
-      "name": "跳过 A2L",
-      "description": "仅代码生成和编译，不处理 A2L 文件",
-      "estimated_time": 10,
-      "stages": [
-        {"name": "matlab_gen", "enabled": true, "timeout": 1800},
-        {"name": "file_process", "enabled": true, "timeout": 300},
+        {"name": "file_move", "enabled": true, "timeout": 300},
         {"name": "iar_compile", "enabled": true, "timeout": 1200},
         {"name": "a2l_process", "enabled": false, "timeout": 600},
         {"name": "package", "enabled": true, "timeout": 60}
@@ -42,11 +31,12 @@
     {
       "id": "code_only",
       "name": "仅代码生成",
-      "description": "仅执行 MATLAB 代码生成阶段",
+      "description": "仅执行 MATLAB 代码生成和文件处理阶段",
       "estimated_time": 5,
       "stages": [
         {"name": "matlab_gen", "enabled": true, "timeout": 1800},
-        {"name": "file_process", "enabled": false, "timeout": 300},
+        {"name": "file_process", "enabled": true, "timeout": 300},
+        {"name": "file_move", "enabled": true, "timeout": 300},
         {"name": "iar_compile", "enabled": false, "timeout": 1200},
         {"name": "a2l_process", "enabled": false, "timeout": 600},
         {"name": "package", "enabled": false, "timeout": 60}

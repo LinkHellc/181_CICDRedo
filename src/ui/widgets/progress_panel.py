@@ -1,11 +1,10 @@
 """Progress panel widget for real-time build progress display (Story 2.14)
 
-This module implements the ProgressPanel widget that displays build progress,
-stage status, and time information in real-time.
-
-Architecture Decision 3.1:
-- 使用 PyQt6 QWidget 实现自定义组件
-- 跨线程信号使用 QueuedConnection（在连接时设置）
+Redesigned with Industrial Precision Theme (v4.0 - 2026-02-24)
+- 工业精密美学
+- 清晰的视觉层次
+- 紧凑但舒适的布局
+- 阶段状态一目了然
 """
 
 import logging
@@ -13,159 +12,377 @@ import time
 from typing import Optional
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout,
-    QProgressBar, QLabel, QTableWidget,
-    QTableWidgetItem, QHeaderView, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QProgressBar, QLabel, QFrame, QScrollArea,
+    QSizePolicy, QSpacerItem
 )
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtProperty
-from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtGui import QColor, QPalette, QFont
 
 from src.core.models import BuildProgress, StageStatus
 
 logger = logging.getLogger(__name__)
 
 
+class StageCard(QFrame):
+    """单个阶段卡片组件"""
+
+    STAGE_ICONS = {
+        "matlab_gen": "🔬",
+        "file_process": "⚙️",
+        "file_move": "📦",
+        "iar_compile": "🔧",
+        "a2l_process": "📝",
+        "package": "🎯",
+    }
+
+    STAGE_NAMES = {
+        "matlab_gen": "MATLAB 代码生成",
+        "file_process": "文件处理",
+        "file_move": "文件复制",
+        "iar_compile": "IAR 编译",
+        "a2l_process": "A2L 处理",
+        "package": "打包归档",
+    }
+
+    STATUS_ICONS = {
+        StageStatus.PENDING: "⏳",
+        StageStatus.RUNNING: "🔄",
+        StageStatus.COMPLETED: "✅",
+        StageStatus.FAILED: "❌",
+        StageStatus.CANCELLED: "⏹️",
+        StageStatus.SKIPPED: "⏭️",
+    }
+
+    STATUS_COLORS = {
+        StageStatus.PENDING: ("#475569", "#1e293b"),      # 灰色文字，深色背景
+        StageStatus.RUNNING: ("#3b82f6", "#1e3a5f"),     # 蓝色文字，蓝色背景
+        StageStatus.COMPLETED: ("#22c55e", "#14532d"),   # 绿色文字，绿色背景
+        StageStatus.FAILED: ("#ef4444", "#7f1d1d"),      # 红色文字，红色背景
+        StageStatus.CANCELLED: ("#6b7280", "#374151"),   # 灰色
+        StageStatus.SKIPPED: ("#f97316", "#7c2d12"),     # 橙色
+    }
+
+    def __init__(self, stage_name: str, parent=None):
+        super().__init__(parent)
+        self.stage_name = stage_name
+        self._status = StageStatus.PENDING
+        self._duration = 0.0
+
+        self.setObjectName("stageCard")
+        self.setStyleSheet(self._get_stylesheet())
+        self.setFixedHeight(56)
+
+        self._init_ui()
+
+    def _get_stylesheet(self) -> str:
+        return """
+            QFrame#stageCard {
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 8px;
+            }
+            QFrame#stageCard:hover {
+                border-color: #475569;
+            }
+            QLabel {
+                background: transparent;
+            }
+        """
+
+    def _init_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(12)
+
+        # 状态图标
+        self.status_icon = QLabel(self.STATUS_ICONS[StageStatus.PENDING])
+        self.status_icon.setFixedSize(24, 24)
+        self.status_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.status_icon)
+
+        # 阶段图标和名称
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(2)
+
+        icon = self.STAGE_ICONS.get(self.stage_name, "📋")
+        display_name = self.STAGE_NAMES.get(self.stage_name, self.stage_name)
+
+        self.name_label = QLabel(f"{icon} {display_name}")
+        self.name_label.setStyleSheet("color: #f1f5f9; font-size: 13px; font-weight: 500;")
+        info_layout.addWidget(self.name_label)
+
+        self.duration_label = QLabel("等待中")
+        self.duration_label.setStyleSheet("color: #64748b; font-size: 11px;")
+        info_layout.addWidget(self.duration_label)
+
+        layout.addLayout(info_layout, 1)
+
+        # 状态标签
+        self.status_label = QLabel("待执行")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.status_label.setStyleSheet("""
+            color: #94a3b8;
+            font-size: 12px;
+            padding: 4px 12px;
+            background-color: #334155;
+            border-radius: 4px;
+        """)
+        layout.addWidget(self.status_label)
+
+    def set_status(self, status: StageStatus, duration: float = 0.0):
+        """设置阶段状态"""
+        self._status = status
+        self._duration = duration
+
+        # 更新状态图标
+        self.status_icon.setText(self.STATUS_ICONS.get(status, "❓"))
+
+        # 更新持续时间
+        if status == StageStatus.RUNNING:
+            self.duration_label.setText("执行中...")
+        elif status == StageStatus.COMPLETED:
+            self.duration_label.setText(f"耗时 {duration:.1f}s")
+        elif status == StageStatus.FAILED:
+            self.duration_label.setText(f"失败 (耗时 {duration:.1f}s)")
+        elif status == StageStatus.SKIPPED:
+            self.duration_label.setText("已跳过")
+        else:
+            self.duration_label.setText("等待中")
+
+        # 更新状态标签
+        text_color, bg_color = self.STATUS_COLORS.get(status, ("#94a3b8", "#334155"))
+        status_texts = {
+            StageStatus.PENDING: "待执行",
+            StageStatus.RUNNING: "执行中",
+            StageStatus.COMPLETED: "已完成",
+            StageStatus.FAILED: "失败",
+            StageStatus.CANCELLED: "已取消",
+            StageStatus.SKIPPED: "已跳过",
+        }
+        self.status_label.setText(status_texts.get(status, "未知"))
+        self.status_label.setStyleSheet(f"""
+            color: {text_color};
+            font-size: 12px;
+            font-weight: 500;
+            padding: 4px 12px;
+            background-color: {bg_color};
+            border-radius: 4px;
+        """)
+
+
 class ProgressPanel(QWidget):
-    """构建进度面板组件 (Story 2.14 - 任务 5)
+    """构建进度面板组件 - 工业精密风格
 
-    显示构建进度的实时面板，包含进度条、阶段列表、时间信息等。
-
-    Architecture Decision 3.1:
-    - 继承 QWidget
-    - 使用 QVBoxLayout 进行布局
-    - 支持进度更新、状态显示、错误处理等功能
-
-    Tasks:
-        任务 5: 创建 PyQt6 进度面板组件
-        任务 6: 实现进度更新接口
-        任务 9: 实现阶段状态颜色高亮
-        任务 12: 添加性能监控
-        任务 13: 实现进度动画效果
-        任务 14: 添加错误状态处理
+    设计理念：
+    - 清晰的阶段卡片布局
+    - 顶部进度概览
+    - 底部时间统计
+    - 阶段状态一目了然
     """
 
     def __init__(self, parent: Optional[QWidget] = None):
-        """初始化进度面板
-
-        Args:
-            parent: 父窗口
-        """
         super().__init__(parent)
 
-        # 当前进度对象
         self.current_progress = BuildProgress()
+        self.stage_cards: dict[str, StageCard] = {}
 
-        # 性能监控 (任务 12)
+        # 性能监控
         self.last_update_time = time.monotonic()
         self.update_intervals = []
         self.max_interval_history = 100
-
-        # 动画配置 (任务 13)
-        self.enable_animations = True
-        self._animation_value = 0.0  # 用于动画效果的内部值
-
-        # 进度更新频率保证 (任务 9)
         self.last_update_timestamp = time.monotonic()
-        self.update_frequency_timer = None  # QTimer
+        self.update_frequency_timer = None
 
-        # 初始化 UI
+        # 动画
+        self.enable_animations = True
+        self._animation_value = 0.0
+
         self._init_ui()
-
+        self.setStyleSheet(self._get_stylesheet())
         logger.debug("进度面板初始化完成")
 
-    def _init_ui(self):
-        """初始化 UI 组件 (任务 5.2-5.7)"""
-        layout = QVBoxLayout()
-        layout.setSpacing(12)
-        layout.setContentsMargins(16, 16, 16, 16)
+    def _get_stylesheet(self) -> str:
+        return """
+            QWidget {
+                background-color: transparent;
+            }
+            QProgressBar {
+                background-color: #1e293b;
+                border: none;
+                border-radius: 6px;
+                text-align: center;
+                color: #f8fafc;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #f97316, stop:1 #fb923c);
+                border-radius: 6px;
+            }
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                background-color: #1e293b;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #475569;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """
 
-        # ===== 进度条 (任务 5.2) =====
+    def _init_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # ===== 顶部进度概览 =====
+        overview_frame = QFrame()
+        overview_frame.setStyleSheet("""
+            QFrame {
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 8px;
+            }
+        """)
+        overview_layout = QVBoxLayout(overview_frame)
+        overview_layout.setSpacing(12)
+        overview_layout.setContentsMargins(20, 16, 20, 16)
+
+        # 第一行：标题和百分比
+        header_row = QHBoxLayout()
+        header_row.setSpacing(12)
+
+        self.title_label = QLabel("📊 构建进度")
+        self.title_label.setStyleSheet("color: #f8fafc; font-size: 14px; font-weight: 600;")
+        header_row.addWidget(self.title_label)
+
+        header_row.addStretch()
+
+        self.percentage_label = QLabel("0%")
+        self.percentage_label.setStyleSheet("color: #f97316; font-size: 18px; font-weight: 700;")
+        header_row.addWidget(self.percentage_label)
+
+        overview_layout.addLayout(header_row)
+
+        # 进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("%p%")
-        self.progress_bar.setMinimumHeight(28)
-        self.progress_bar.setTextVisible(True)
-        layout.addWidget(self.progress_bar)
+        self.progress_bar.setFormat("")
+        self.progress_bar.setFixedHeight(8)
+        overview_layout.addWidget(self.progress_bar)
 
-        # ===== 当前阶段标签 (任务 5.4) =====
+        # 第三行：当前阶段
         self.current_stage_label = QLabel("等待开始...")
-        self.current_stage_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 8px;")
-        layout.addWidget(self.current_stage_label)
+        self.current_stage_label.setStyleSheet("color: #64748b; font-size: 12px;")
+        overview_layout.addWidget(self.current_stage_label)
 
-        # ===== 分隔线 =====
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFrameShadow(QFrame.Shadow.Sunken)
-        layout.addWidget(separator)
+        main_layout.addWidget(overview_frame)
 
-        # ===== 阶段列表 (任务 5.3) =====
-        self.stage_list = QTableWidget()
-        self.stage_list.setColumnCount(2)
-        self.stage_list.setHorizontalHeaderLabels(["阶段名称", "状态"])
-        self.stage_list.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch
-        )
-        self.stage_list.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.stage_list.setMinimumHeight(200)
-        self.stage_list.verticalHeader().setVisible(False)
-        self.stage_list.setSelectionBehavior(
-            QTableWidget.SelectionBehavior.SelectRows
-        )
-        self.stage_list.itemClicked.connect(self._on_stage_clicked)
-        layout.addWidget(self.stage_list)
+        # ===== 阶段列表区域 =====
+        stages_frame = QFrame()
+        stages_frame.setStyleSheet("""
+            QFrame {
+                background-color: #0f172a;
+                border: 1px solid #334155;
+                border-radius: 8px;
+            }
+        """)
+        stages_layout = QVBoxLayout(stages_frame)
+        stages_layout.setSpacing(8)
+        stages_layout.setContentsMargins(12, 12, 12, 12)
 
-        # ===== 时间信息标签 (任务 5.5) =====
-        self.time_label = QLabel("已用时间: 00:00:00 | 预计剩余: --:--:--")
-        self.time_label.setStyleSheet("font-size: 12px; color: #666; padding: 8px;")
-        layout.addWidget(self.time_label)
+        # 阶段列表标题
+        stages_header = QLabel("执行阶段")
+        stages_header.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 500; padding: 4px;")
+        stages_layout.addWidget(stages_header)
 
-        # 任务 5.6: 设计布局（进度条在顶部，阶段列表在下方，时间信息在底部）
+        # 阶段卡片容器
+        self.stages_container = QWidget()
+        self.stages_layout = QVBoxLayout(self.stages_container)
+        self.stages_layout.setSpacing(8)
+        self.stages_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.setLayout(layout)
+        # 滚动区域
+        scroll = QScrollArea()
+        scroll.setWidget(self.stages_container)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumHeight(200)
+        scroll.setStyleSheet("background: transparent;")
+        stages_layout.addWidget(scroll)
+
+        main_layout.addWidget(stages_frame, 1)
+
+        # ===== 底部时间统计 =====
+        time_frame = QFrame()
+        time_frame.setStyleSheet("""
+            QFrame {
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 8px;
+            }
+        """)
+        time_layout = QHBoxLayout(time_frame)
+        time_layout.setContentsMargins(20, 12, 20, 12)
+
+        # 已用时间
+        elapsed_icon = QLabel("⏱️")
+        time_layout.addWidget(elapsed_icon)
+
+        self.elapsed_label = QLabel("00:00:00")
+        self.elapsed_label.setStyleSheet("color: #f8fafc; font-size: 14px; font-weight: 500;")
+        time_layout.addWidget(self.elapsed_label)
+
+        time_layout.addStretch()
+
+        # 预计剩余
+        remaining_icon = QLabel("📈")
+        time_layout.addWidget(remaining_icon)
+
+        self.remaining_label = QLabel("--:--:--")
+        self.remaining_label.setStyleSheet("color: #64748b; font-size: 14px;")
+        time_layout.addWidget(self.remaining_label)
+
+        main_layout.addWidget(time_frame)
 
     def initialize_stages(self, stage_names: list[str]):
-        """初始化阶段列表 (任务 5.1-5.6)
+        """初始化阶段列表"""
+        # 清空现有卡片
+        for card in self.stage_cards.values():
+            card.deleteLater()
+        self.stage_cards.clear()
 
-        清空当前阶段列表，并为每个阶段创建列表项。
-        所有阶段的初始状态设置为 PENDING，进度为 0。
+        # 清空布局
+        while self.stages_layout.count():
+            item = self.stages_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
-        Args:
-            stage_names: 阶段名称列表
-        """
-        # 任务 5.3: 清空阶段列表
-        self.stage_list.setRowCount(0)
-
-        # 任务 5.5: 初始状态设置为 PENDING
+        # 创建新卡片
         for stage_name in stage_names:
-            # 添加新行
-            row = self.stage_list.rowCount()
-            self.stage_list.insertRow(row)
+            card = StageCard(stage_name)
+            self.stage_cards[stage_name] = card
+            self.stages_layout.addWidget(card)
 
-            # 任务 5.4: 为每个阶段创建列表项（阶段名称）
-            name_item = QTableWidgetItem(stage_name)
-            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.stage_list.setItem(row, 0, name_item)
+        # 添加弹性空间
+        self.stages_layout.addStretch()
 
-            # 任务 5.4: 为每个阶段创建列表项（状态）
-            status_text = self._get_stage_status_text(StageStatus.PENDING)
-            status_item = QTableWidgetItem(status_text)
-            status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-
-            # 应用 PENDING 状态颜色
-            color = self._get_stage_color(StageStatus.PENDING)
-            status_item.setForeground(QColor(color))
-
-            self.stage_list.setItem(row, 1, status_item)
-
-        # 任务 5.6: 设置初始进度为 0
+        # 重置进度
         self.progress_bar.setValue(0)
+        self.percentage_label.setText("0%")
         self.current_stage_label.setText("等待开始...")
-        self.current_stage_label.setStyleSheet(
-            "font-weight: bold; font-size: 14px; color: black; padding: 8px;"
-        )
 
         # 重置进度对象
         self.current_progress = BuildProgress(
@@ -178,160 +395,43 @@ class ProgressPanel(QWidget):
         logger.debug(f"已初始化 {len(stage_names)} 个阶段")
 
     def update_progress(self, progress: BuildProgress):
-        """更新进度 (任务 6.1-6.7)
-
-        Args:
-            progress: 构建进度对象
-        """
+        """更新进度"""
         self.current_progress = progress
-
-        # 任务 9.2: 记录最后一次更新的时间戳
         self.last_update_timestamp = time.monotonic()
 
-        # 性能监控 (任务 12.1-12.4)
+        # 性能监控
         current_time = time.monotonic()
         interval = current_time - self.last_update_time
-
         self.update_intervals.append(interval)
         if len(self.update_intervals) > self.max_interval_history:
             self.update_intervals.pop(0)
 
-        avg_interval = sum(self.update_intervals) / len(self.update_intervals)
-
         if interval > 2.0:
-            logger.warning(
-                f"进度更新间隔过长: {interval:.2f} 秒（平均: {avg_interval:.2f} 秒）"
-            )
+            avg = sum(self.update_intervals) / len(self.update_intervals)
+            logger.warning(f"进度更新间隔过长: {interval:.2f}s (平均: {avg:.2f}s)")
 
         self.last_update_time = current_time
 
-        # 更新进度条 (任务 6.3)
-        self.progress_bar.setValue(int(progress.percentage))
+        # 更新进度条
+        percent = int(progress.percentage)
+        if self.enable_animations:
+            self._animate_progress(percent)
+        else:
+            self.progress_bar.setValue(percent)
 
-        # 更新当前阶段标签 (任务 6.4)
-        self._update_current_stage_label(progress)
+        self.percentage_label.setText(f"{percent}%")
 
-        # 更新阶段列表 (任务 6.5)
-        self._update_stage_list(progress)
+        # 更新当前阶段
+        self._update_current_stage(progress)
 
-        # 更新时间显示 (任务 6.6)
+        # 更新阶段卡片
+        self._update_stage_cards(progress)
+
+        # 更新时间
         self._update_time_display(progress)
 
-        # 更新动画 (任务 13)
-        if self.enable_animations:
-            self._update_animations()
-
-    def _update_current_stage_label(self, progress: BuildProgress):
-        """更新当前阶段标签 (任务 6.4)"""
-        if progress.current_stage:
-            stage_status = progress.stage_statuses.get(progress.current_stage)
-
-            if stage_status == StageStatus.FAILED:
-                # 任务 14.2: 为失败阶段显示红色高亮
-                self.current_stage_label.setText(f"❌ 阶段失败: {progress.current_stage}")
-                self.current_stage_label.setStyleSheet(
-                    "font-weight: bold; font-size: 14px; color: red; padding: 8px;"
-                )
-            elif stage_status == StageStatus.COMPLETED:
-                self.current_stage_label.setText(f"✅ {progress.current_stage}")
-                self.current_stage_label.setStyleSheet(
-                    "font-weight: bold; font-size: 14px; color: green; padding: 8px;"
-                )
-            elif stage_status == StageStatus.RUNNING:
-                self.current_stage_label.setText(f"🔄 正在执行: {progress.current_stage}")
-                self.current_stage_label.setStyleSheet(
-                    "font-weight: bold; font-size: 14px; color: blue; padding: 8px;"
-                )
-            elif stage_status == StageStatus.SKIPPED:
-                self.current_stage_label.setText(f"⏭️ {progress.current_stage} (跳过)")
-                self.current_stage_label.setStyleSheet(
-                    "font-weight: bold; font-size: 14px; color: orange; padding: 8px;"
-                )
-            else:
-                self.current_stage_label.setText(f"⏸️ {progress.current_stage}")
-                self.current_stage_label.setStyleSheet(
-                    "font-weight: bold; font-size: 14px; color: gray; padding: 8px;"
-                )
-        else:
-            self.current_stage_label.setText("等待开始...")
-            self.current_stage_label.setStyleSheet(
-                "font-weight: bold; font-size: 14px; color: black; padding: 8px;"
-            )
-
-    def _update_stage_list(self, progress: BuildProgress):
-        """更新阶段列表 (任务 6.5)"""
-        self.stage_list.setRowCount(len(progress.stage_statuses))
-
-        for row, (stage_name, status) in enumerate(progress.stage_statuses.items()):
-            # 阶段名称
-            name_item = QTableWidgetItem(stage_name)
-            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.stage_list.setItem(row, 0, name_item)
-
-            # 状态
-            status_text = self._get_stage_status_text(status)
-            status_item = QTableWidgetItem(status_text)
-            status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-
-            # 任务 9.1-9.3: 应用颜色高亮
-            color = self._get_stage_color(status)
-            status_item.setForeground(QColor(color))
-
-            self.stage_list.setItem(row, 1, status_item)
-
-    def _get_stage_status_text(self, status: StageStatus) -> str:
-        """获取阶段状态文本
-
-        Args:
-            status: 阶段状态枚举
-
-        Returns:
-            str: 状态文本
-        """
-        status_map = {
-            StageStatus.PENDING: "⏸️ 等待中",
-            StageStatus.RUNNING: "🔄 进行中",
-            StageStatus.COMPLETED: "✅ 已完成",
-            StageStatus.FAILED: "❌ 失败",
-            StageStatus.CANCELLED: "⏸️ 已取消",
-            StageStatus.SKIPPED: "⏭️ 跳过"
-        }
-        return status_map.get(status, "未知")
-
-    def _get_stage_color(self, status: StageStatus) -> str:
-        """获取阶段状态颜色 (任务 9.1-9.2)
-
-        Args:
-            status: 阶段状态枚举
-
-        Returns:
-            str: 颜色字符串（ QColor 支持的格式）
-        """
-        # 任务 9.2: 定义颜色映射
-        color_map = {
-            StageStatus.PENDING: "#808080",  # 灰色
-            StageStatus.RUNNING: "#0066cc",  # 蓝色
-            StageStatus.COMPLETED: "#008000",  # 绿色
-            StageStatus.FAILED: "#cc0000",  # 红色
-            StageStatus.CANCELLED: "#808080",  # 灰色
-            StageStatus.SKIPPED: "#ff8800"  # 橙色
-        }
-        return color_map.get(status, "#000000")
-
-    def _update_time_display(self, progress: BuildProgress):
-        """更新时间显示 (任务 6.6, 任务 10)"""
-        from src.utils.progress import format_duration
-
-        elapsed_text = format_duration(progress.elapsed_time)
-        remaining_text = format_duration(progress.estimated_remaining_time)
-
-        self.time_label.setText(
-            f"已用时间: {elapsed_text} | 预计剩余: {remaining_text}"
-        )
-
-    def _update_animations(self):
-        """更新动画效果 (任务 13)"""
-        # 任务 13.1: 为进度条添加平滑动画效果
+    def _animate_progress(self, target_value: int):
+        """动画更新进度条"""
         if hasattr(self, '_progress_animation'):
             self._progress_animation.stop()
 
@@ -341,148 +441,89 @@ class ProgressPanel(QWidget):
         self._progress_animation.setDuration(300)
         self._progress_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._progress_animation.setStartValue(self.progress_bar.value())
-        self._progress_animation.setEndValue(int(self.current_progress.percentage))
+        self._progress_animation.setEndValue(target_value)
         self._progress_animation.start()
 
-    def _check_update_frequency(self):
-        """检查更新频率 (任务 9.3)
-
-        如果超过 1 秒没有更新，强制刷新进度显示。
-        这个方法应该由 QTimer 定期调用。
-        """
-        current_time = time.monotonic()
-        elapsed = current_time - self.last_update_timestamp
-
-        # 任务 9.3: 如果超过 1 秒没有更新，强制刷新进度显示
-        if elapsed > 1.0:
-            logger.warning(
-                f"进度更新超过 1 秒: {elapsed:.2f} 秒，强制刷新显示"
-            )
-            # 强制刷新当前进度显示
-            self._force_refresh_display()
-
-    def _force_refresh_display(self):
-        """强制刷新进度显示 (任务 9.3)"""
-        # 重新触发当前进度对象的更新
-        if self.current_progress:
-            self._update_current_stage_label(self.current_progress)
-            self._update_stage_list(self.current_progress)
-            self._update_time_display(self.current_progress)
-
-            # 更新最后更新时间
-            self.last_update_timestamp = time.monotonic()
-
-    def start_update_frequency_monitoring(self):
-        """启动进度更新频率监控 (任务 9.4)
-
-        使用 QTimer 定期检查更新频率，确保进度显示及时更新。
-        """
-        from PyQt6.QtCore import QTimer
-
-        if self.update_frequency_timer is None:
-            self.update_frequency_timer = QTimer(self)
-            self.update_frequency_timer.timeout.connect(self._check_update_frequency)
-            # 每 500ms 检查一次更新频率
-            self.update_frequency_timer.start(500)
-            logger.debug("进度更新频率监控已启动")
-
-    def stop_update_frequency_monitoring(self):
-        """停止进度更新频率监控 (任务 9.4)"""
-        if self.update_frequency_timer is not None:
-            self.update_frequency_timer.stop()
-            self.update_frequency_timer = None
-            logger.debug("进度更新频率监控已停止")
-
-    def _on_stage_clicked(self, item: QTableWidgetItem):
-        """处理阶段列表项点击 (任务 14.1-14.3)
-
-        Args:
-            item: 被点击的表格项
-        """
-        row = item.row()
-        stage_name_item = self.stage_list.item(row, 0)
-        if stage_name_item is None:
+    def _update_current_stage(self, progress: BuildProgress):
+        """更新当前阶段显示"""
+        if not progress.current_stage:
+            self.current_stage_label.setText("等待开始...")
+            self.current_stage_label.setStyleSheet("color: #64748b; font-size: 12px;")
             return
 
-        stage_name = stage_name_item.text()
-        stage_status = self.current_progress.stage_statuses.get(stage_name)
+        stage = progress.current_stage
+        status = progress.stage_statuses.get(stage)
+        icon = StageCard.STAGE_ICONS.get(stage, "📋")
+        name = StageCard.STAGE_NAMES.get(stage, stage)
 
-        # 任务 14.1: 处理 FAILED 状态
-        if stage_status == StageStatus.FAILED:
-            from PyQt6.QtWidgets import QMessageBox
+        if status == StageStatus.RUNNING:
+            self.current_stage_label.setText(f"🔄 正在执行: {name}")
+            self.current_stage_label.setStyleSheet("color: #3b82f6; font-size: 12px;")
+        elif status == StageStatus.COMPLETED:
+            self.current_stage_label.setText(f"✅ {name} 完成")
+            self.current_stage_label.setStyleSheet("color: #22c55e; font-size: 12px;")
+        elif status == StageStatus.FAILED:
+            self.current_stage_label.setText(f"❌ {name} 失败")
+            self.current_stage_label.setStyleSheet("color: #ef4444; font-size: 12px;")
+        elif status == StageStatus.SKIPPED:
+            self.current_stage_label.setText(f"⏭️ {name} 已跳过")
+            self.current_stage_label.setStyleSheet("color: #f97316; font-size: 12px;")
+        else:
+            self.current_stage_label.setText(f"⏳ {name}")
+            self.current_stage_label.setStyleSheet("color: #64748b; font-size: 12px;")
 
-            # 任务 14.3: 点击失败阶段显示错误详情
-            error_message = self.current_progress.stage_errors.get(
-                stage_name, "未知错误"
-            )
+    def _update_stage_cards(self, progress: BuildProgress):
+        """更新阶段卡片"""
+        for stage_name, status in progress.stage_statuses.items():
+            if stage_name in self.stage_cards:
+                duration = progress.elapsed_time  # 简化：使用总时间
+                self.stage_cards[stage_name].set_status(status, duration)
 
-            QMessageBox.critical(
-                self,
-                "阶段失败",
-                f"阶段 '{stage_name}' 执行失败：\n\n{error_message}"
-            )
-            logger.info(f"显示阶段失败详情: {stage_name}")
+    def _update_time_display(self, progress: BuildProgress):
+        """更新时间显示"""
+        from src.utils.progress import format_duration
 
-    def set_animations_enabled(self, enabled: bool):
-        """启用或禁用动画效果 (任务 13.4)
+        elapsed = format_duration(progress.elapsed_time)
+        remaining = format_duration(progress.estimated_remaining_time)
 
-        Args:
-            enabled: 是否启用动画
-        """
-        self.enable_animations = enabled
-        logger.debug(f"进度面板动画{'启用' if enabled else '禁用'}")
+        self.elapsed_label.setText(elapsed)
+        self.remaining_label.setText(remaining)
 
     def clear(self):
         """清空进度显示"""
-        self.current_progress = BuildProgress()
+        for card in self.stage_cards.values():
+            card.set_status(StageStatus.PENDING)
+
         self.progress_bar.setValue(0)
+        self.percentage_label.setText("0%")
         self.current_stage_label.setText("等待开始...")
-        self.current_stage_label.setStyleSheet(
-            "font-weight: bold; font-size: 14px; color: black; padding: 8px;"
-        )
-        self.stage_list.setRowCount(0)
-        self.time_label.setText("已用时间: 00:00:00 | 预计剩余: --:--:--")
+        self.elapsed_label.setText("00:00:00")
+        self.remaining_label.setText("--:--:--")
+
+        self.current_progress = BuildProgress()
         logger.debug("进度面板已清空")
 
     def show_cancelled_state(self):
-        """显示取消状态 (Story 2.15 - 任务 10.5, 任务 12.1-12.6)
-
-        更新进度面板显示构建已取消的状态。
-        """
-        # 更新当前阶段标签 (任务 12.3)
+        """显示取消状态"""
         self.current_stage_label.setText("❌ 构建已取消")
-        self.current_stage_label.setStyleSheet(
-            "font-weight: bold; font-size: 14px; color: orange; padding: 8px;"
-        )
+        self.current_stage_label.setStyleSheet("color: #f97316; font-size: 12px;")
 
-        # 更新所有阶段状态为 CANCELLED (任务 12.1, 12.2)
-        for row in range(self.stage_list.rowCount()):
-            stage_name_item = self.stage_list.item(row, 0)
-            if stage_name_item:
-                stage_name = stage_name_item.text()
+        for card in self.stage_cards.values():
+            card.set_status(StageStatus.CANCELLED)
 
-                # 更新状态文本 (任务 12.3)
-                status_text = self._get_stage_status_text(StageStatus.CANCELLED)
-                status_item = self.stage_list.item(row, 1)
-                if status_item:
-                    status_item.setText(status_text)
-
-                    # 应用颜色 (任务 12.4)
-                    color = self._get_stage_color(StageStatus.CANCELLED)
-                    status_item.setForeground(QColor(color))
-
-        # 更新时间显示：显示取消时的已用时间 (任务 12.5)
-        elapsed_text = format_duration(self.current_progress.elapsed_time)
-        self.time_label.setText(f"已用时间: {elapsed_text} | 构建已取消")
+        from src.utils.progress import format_duration
+        elapsed = format_duration(self.current_progress.elapsed_time)
+        self.elapsed_label.setText(elapsed)
+        self.remaining_label.setText("已取消")
 
         logger.debug("进度面板已显示取消状态")
 
-    def get_average_update_interval(self) -> float:
-        """获取平均更新间隔 (任务 12.2, 12.3)
+    def set_animations_enabled(self, enabled: bool):
+        """启用/禁用动画"""
+        self.enable_animations = enabled
 
-        Returns:
-            float: 平均更新间隔（秒）
-        """
+    def get_average_update_interval(self) -> float:
+        """获取平均更新间隔"""
         if not self.update_intervals:
             return 0.0
         return sum(self.update_intervals) / len(self.update_intervals)

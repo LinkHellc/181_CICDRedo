@@ -669,24 +669,39 @@ class MatlabIntegration:
 
         try:
             if async_mode:
-                # 异步执行模式 (Story 2.5 - 任务 4.2)
-                future = self.engine.run(script_path, *args, nargout=0, async_=True)
+                # 异步执行模式 - 尝试不同的参数名（兼容不同版本的 MATLAB Engine）
+                future = None
+                try:
+                    # 新版本使用 background 参数
+                    future = self.engine.run(script_path, *args, nargout=0, background=True)
+                except TypeError:
+                    try:
+                        # 旧版本使用 async_ 参数
+                        future = self.engine.run(script_path, *args, nargout=0, async_=True)
+                    except TypeError:
+                        # 不支持异步，使用同步模式
+                        self._log("MATLAB Engine 不支持异步模式，使用同步模式")
+                        self.engine.run(script_path, *args, nargout=0)
+                        elapsed = time.monotonic() - start_time
+                        self._log(f"MATLAB 脚本执行完成（耗时 {elapsed:.2f} 秒）")
+                        return True
 
-                # 监控执行状态 (Story 2.5 - 任务 4.3)
-                poll_interval = 0.5  # 0.5 秒轮询间隔
-                while not future.done():
-                    # 检查超时 (Story 2.5 - 任务 5.2)
-                    elapsed = time.monotonic() - start_time
-                    if elapsed > self.timeout:
-                        # 超时处理 (Story 2.5 - 任务 5.3)
-                        self._log(f"MATLAB 执行超时（{elapsed:.1f} 秒），正在终止...")
-                        self.stop_engine()
-                        raise ProcessTimeoutError("MATLAB 代码生成", self.timeout)
+                if future is not None:
+                    # 监控执行状态 (Story 2.5 - 任务 4.3)
+                    poll_interval = 0.5  # 0.5 秒轮询间隔
+                    while not future.done():
+                        # 检查超时 (Story 2.5 - 任务 5.2)
+                        elapsed = time.monotonic() - start_time
+                        if elapsed > self.timeout:
+                            # 超时处理 (Story 2.5 - 任务 5.3)
+                            self._log(f"MATLAB 执行超时（{elapsed:.1f} 秒），正在终止...")
+                            self.stop_engine()
+                            raise ProcessTimeoutError("MATLAB 代码生成", self.timeout)
 
-                    time.sleep(poll_interval)
+                        time.sleep(poll_interval)
 
-                # 获取结果
-                future.result()
+                    # 获取结果
+                    future.result()
             else:
                 # 同步执行模式
                 self.engine.run(script_path, *args, nargout=0)

@@ -776,12 +776,14 @@ def locate_output_files(source_path: Path, file_type: str = "hex") -> List[Path]
 
     Story 2.12 - 任务 1.1-1.5:
     - 接受源路径和文件类型参数（HEX/A2L）
+    - 支持文件路径：如果 source_path 是文件，直接返回该文件（如果扩展名匹配）
+    - 支持目录路径：如果 source_path 是目录，搜索目录中的文件
     - HEX 文件：只匹配 VIU_Cherry_E0Y_FL1_CYT4BFV3_AB_YYYYMMDD_V99_HH_MM.hex 格式的主应用文件
     - A2L 文件：匹配所有 *.a2l 文件
     - 返回找到的文件路径列表
 
     Args:
-        source_path: 源路径
+        source_path: 源路径（可以是文件或目录）
         file_type: 文件类型（hex 或 a2l，默认 hex）
 
     Returns:
@@ -799,8 +801,20 @@ def locate_output_files(source_path: Path, file_type: str = "hex") -> List[Path]
         ...     files = locate_output_files(base, "hex")
         ...     assert len(files) == 1
         ...     assert files[0].name == "test.hex"
+        ...     # 也可以直接传入文件路径
+        ...     files2 = locate_output_files(base / "test.hex", "hex")
+        ...     assert len(files2) == 1
     """
     import re
+
+    # 如果 source_path 是文件，直接返回（如果扩展名匹配）
+    if source_path.is_file():
+        if source_path.suffix.lower() == f".{file_type}":
+            logger.debug(f"定位 {file_type.upper()} 文件: 直接使用文件路径 {source_path.name}")
+            return [source_path]
+        else:
+            logger.debug(f"定位 {file_type.upper()} 文件: 文件扩展名不匹配 {source_path.suffix}")
+            return []
 
     if file_type.lower() == "hex":
         # 精确匹配主应用 HEX 文件：VIU_Chery_E0Y_FL1_CYT4BFV3_AB_YYYYMMDD_V99_HH_MM.hex
@@ -1039,24 +1053,30 @@ def move_output_files_safe(
     failed_files: List[Tuple[Path, Exception]] = []
 
     # 移动 HEX 文件
-    hex_files = locate_output_files(source_path_hex, "hex")
-    for hex_file in hex_files:
-        try:
-            target_file = move_output_file(hex_file, target_folder, timestamp)
-            success_files.append(target_file)
-        except Exception as e:
-            logger.error(f"HEX 文件移动失败: {hex_file} - {e}")
-            failed_files.append((hex_file, e))
+    if source_path_hex and source_path_hex.exists():
+        hex_files = locate_output_files(source_path_hex, "hex")
+        for hex_file in hex_files:
+            try:
+                target_file = move_output_file(hex_file, target_folder, timestamp)
+                success_files.append(target_file)
+            except Exception as e:
+                logger.error(f"HEX 文件移动失败: {hex_file} - {e}")
+                failed_files.append((hex_file, e))
+    else:
+        logger.info("HEX 源路径不存在或为空，跳过 HEX 文件移动")
 
     # 移动 A2L 文件
-    a2l_files = locate_output_files(source_path_a2l, "a2l")
-    for a2l_file in a2l_files:
-        try:
-            target_file = move_output_file(a2l_file, target_folder, timestamp)
-            success_files.append(target_file)
-        except Exception as e:
-            logger.error(f"A2L 文件移动失败: {a2l_file} - {e}")
-            failed_files.append((a2l_file, e))
+    if source_path_a2l and source_path_a2l.exists():
+        a2l_files = locate_output_files(source_path_a2l, "a2l")
+        for a2l_file in a2l_files:
+            try:
+                target_file = move_output_file(a2l_file, target_folder, timestamp)
+                success_files.append(target_file)
+            except Exception as e:
+                logger.error(f"A2L 文件移动失败: {a2l_file} - {e}")
+                failed_files.append((a2l_file, e))
+    else:
+        logger.info("A2L 源路径不存在或为空，跳过 A2L 文件移动")
 
     logger.info(f"批量移动完成: 成功 {len(success_files)} 个，失败 {len(failed_files)} 个")
     return success_files, failed_files

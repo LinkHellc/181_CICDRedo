@@ -54,6 +54,7 @@ class ProjectConfig:
     a2l_path: str = ""                # A2L 文件路径
     target_path: str = ""             # 目标文件路径
     iar_project_path: str = ""        # IAR 工程路径
+    a2l_tool_path: str = ""           # A2L 工具路径（包含 XCP 头文件模板和处理脚本）
 
     # 可选字段（预留 Phase 2 扩展）
     custom_params: dict = _empty_dict_factory

@@ -94,10 +94,32 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
 
     try:
         # 读取配置 (Story 2.11 - 任务 5.3, Story 2.12 - 任务 5.2-5.4)
-        target_file_path = context.config.get("target_file_path", "")
+        # 注意：项目配置中使用 target_path，而不是 target_file_path
+        target_file_path = context.config.get("target_path", "")
         target_folder_prefix = context.config.get("target_folder_prefix", "MBD_CICD_Obj")
+
+        # 获取或推导 HEX 文件源路径
         hex_source_path_str = context.config.get("hex_source_path", "")
+        if not hex_source_path_str:
+            # 从 iar_project_path 推导 HEX 源路径
+            iar_project_path = context.config.get("iar_project_path", "")
+            if iar_project_path:
+                iar_path = Path(iar_project_path)
+                # HEX 文件通常在 IAR 项目的父目录下的 HexMerge 文件夹
+                hex_source_path_str = str(iar_path.parent / "HexMerge")
+                logger.info(f"从 iar_project_path 推导 hex_source_path: {hex_source_path_str}")
+
+        # 获取或推导 A2L 文件源路径
         a2l_source_path_str = context.config.get("a2l_source_path", "")
+        if not a2l_source_path_str:
+            # 优先从 context.state 获取 A2L 输出路径
+            a2l_source_path_str = context.state.get("a2l_output_path", "")
+            if not a2l_source_path_str:
+                # 从 a2l_tool_path 推导 A2L 源路径
+                a2l_tool_path = context.config.get("a2l_tool_path", "")
+                if a2l_tool_path:
+                    a2l_source_path_str = str(Path(a2l_tool_path) / "output")
+                    logger.info(f"从 a2l_tool_path 推导 a2l_source_path: {a2l_source_path_str}")
 
         # 验证配置 (Story 2.11 - 任务 6.2)
         if not target_file_path:
@@ -110,7 +132,7 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
                 status=StageStatus.FAILED,
                 message=error_msg,
                 suggestions=[
-                    "检查配置文件中的 target_file_path 字段",
+                    "检查配置文件中的 target_path 字段",
                     "确保配置已正确保存"
                 ]
             )
@@ -136,7 +158,7 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
 
         # 验证 HEX 文件源路径配置 (Story 2.12 - 任务 6.2)
         if not hex_source_path_str:
-            error_msg = "HEX 文件源路径配置为空"
+            error_msg = "HEX 文件源路径配置为空，无法自动推导"
             logger.error(error_msg)
             if context.log_callback:
                 context.log_callback(f"[ERROR] {error_msg}")
@@ -145,7 +167,8 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
                 status=StageStatus.FAILED,
                 message=error_msg,
                 suggestions=[
-                    "检查配置文件中的 hex_source_path 字段",
+                    "检查配置文件中的 iar_project_path 字段",
+                    "或直接配置 hex_source_path",
                     "确保 IAR 编译已完成"
                 ]
             )
@@ -168,37 +191,18 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
             )
 
         # 验证 A2L 文件源路径配置 (Story 2.12 - 任务 6.3)
-        if not a2l_source_path_str:
-            error_msg = "A2L 文件源路径配置为空"
-            logger.error(error_msg)
-            if context.log_callback:
-                context.log_callback(f"[ERROR] {error_msg}")
-
-            return StageResult(
-                status=StageStatus.FAILED,
-                message=error_msg,
-                suggestions=[
-                    "检查配置文件中的 a2l_source_path 字段",
-                    "确保 A2L 处理已完成"
-                ]
-            )
-
-        a2l_source_path = Path(a2l_source_path_str)
-        if not a2l_source_path.exists():
-            error_msg = f"A2L 文件源路径不存在: {a2l_source_path}"
-            logger.error(error_msg)
-            if context.log_callback:
-                context.log_callback(f"[ERROR] {error_msg}")
-
-            return StageResult(
-                status=StageStatus.FAILED,
-                message=error_msg,
-                suggestions=[
-                    "检查 A2L 处理是否成功",
-                    "检查配置文件中的 a2l_source_path 设置",
-                    f"确保路径存在: {a2l_source_path}"
-                ]
-            )
+        # 注意：A2L 文件可能是可选的，如果没有则跳过 A2L 文件复制
+        if a2l_source_path_str:
+            a2l_source_path = Path(a2l_source_path_str)
+            if not a2l_source_path.exists():
+                # A2L 路径不存在时给出警告，但不中断流程
+                logger.warning(f"A2L 文件源路径不存在: {a2l_source_path}，将跳过 A2L 文件复制")
+                if context.log_callback:
+                    context.log_callback(f"[WARNING] A2L 文件源路径不存在，将跳过 A2L 文件复制")
+                a2l_source_path = None
+        else:
+            logger.info("未配置 A2L 源路径，将跳过 A2L 文件复制")
+            a2l_source_path = None
 
         # 创建目标文件夹 (Story 2.11 - 任务 5.4)
         target_folder = create_target_folder_safe(base_path, target_folder_prefix)
@@ -220,7 +224,7 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
 
         success_files, failed_files = move_output_files_safe(
             hex_source_path,
-            a2l_source_path,
+            a2l_source_path if a2l_source_path else Path(),
             target_folder,
             timestamp
         )
