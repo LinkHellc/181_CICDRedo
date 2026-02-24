@@ -406,20 +406,28 @@ def move_code_files(
     backup_before_clear: bool = True,
     create_target_if_missing: bool = True,
     verify_after_move: bool = True,
-    skip_verification: bool = False
+    skip_verification: bool = False,
+    delete_source: bool = False  # 是否删除源文件（默认只复制不删除）
 ) -> dict:
-    """移动代码文件到目标目录
+    """复制/移动代码文件到目标目录
 
     Story 2.7 - 任务 1.1-1.5:
-    - 实现原子性文件移动（复制-验证-删除）
-    - 验证每个文件移动的成功性
+    - 实现原子性文件操作（复制-验证）
+    - 验证每个文件复制的成功性
     - 使用 pathlib.Path 处理所有路径
     - 支持清空目标目录
     - 支持备份功能
+    - 默认只复制不删除源文件
 
     Args:
         source_files: 源文件路径列表（Path 对象）
         target_dir: 目标目录路径
+        clear_target_first: 是否先清空目标目录
+        backup_before_clear: 清空前是否备份
+        create_target_if_missing: 目标不存在时是否创建
+        verify_after_move: 是否验证复制结果
+        skip_verification: 是否跳过验证
+        delete_source: 是否删除源文件（默认 False，只复制不删除）
         clear_target_first: 移动前是否清空目标目录（默认 True）
         backup_before_clear: 清空前是否备份（默认 True）
         create_target_if_missing: 目标目录不存在时是否创建（默认 True）
@@ -491,7 +499,7 @@ def move_code_files(
                 shutil.copy2(src_file, dst_file)
                 logger.debug(f"复制文件: {src_file} -> {dst_file}")
 
-                # 第二步：验证移动 (Story 2.7 - 任务 1.4)
+                # 第二步：验证复制 (Story 2.7 - 任务 1.4)
                 if verify_after_move and not skip_verification:
                     verify_report = verify_file_moved(src_file, dst_file)
                     if not verify_report["verified"]:
@@ -503,12 +511,16 @@ def move_code_files(
                         logger.error(f"文件验证失败: {src_file} - {verify_report.get('error')}")
                         continue
 
-                # 第三步：删除源文件 (Story 2.7 - 任务 1.3)
-                src_file.unlink()
+                # 第三步：根据参数决定是否删除源文件（默认只复制不删除）
+                if delete_source:
+                    src_file.unlink()
+                    logger.debug(f"删除源文件: {src_file}")
+                else:
+                    logger.debug(f"保留源文件: {src_file}")
+
                 moved_in_session.append(dst_file)
                 result["moved_files"].append(str(dst_file))
                 result["moved_count"] += 1
-                logger.debug(f"删除源文件: {src_file}")
 
             except Exception as e:
                 # 单个文件移动失败，进行回滚
@@ -764,7 +776,8 @@ def locate_output_files(source_path: Path, file_type: str = "hex") -> List[Path]
 
     Story 2.12 - 任务 1.1-1.5:
     - 接受源路径和文件类型参数（HEX/A2L）
-    - 使用 pathlib.Path.glob() 查找匹配的文件（支持通配符）
+    - HEX 文件：只匹配 VIU_Cherry_E0Y_FL1_CYT4BFV3_AB_YYYYMMDD_V99_HH_MM.hex 格式的主应用文件
+    - A2L 文件：匹配所有 *.a2l 文件
     - 返回找到的文件路径列表
 
     Args:
@@ -787,15 +800,25 @@ def locate_output_files(source_path: Path, file_type: str = "hex") -> List[Path]
         ...     assert len(files) == 1
         ...     assert files[0].name == "test.hex"
     """
+    import re
+
     if file_type.lower() == "hex":
-        pattern = "*.hex"
+        # 精确匹配主应用 HEX 文件：VIU_Chery_E0Y_FL1_CYT4BFV3_AB_YYYYMMDD_V99_HH_MM.hex
+        # 注意：文件名是 Chery（单 r），不是 Cherry（双 r）
+        # 排除：BOOT 文件（包含 _BL_）、FlashDriver 等
+        pattern = r"VIU_Chery_E0Y_FL1_CYT4BFV3_AB_\d{8}_V99_\d{2}_\d{2}\.hex"
+        all_files = list(source_path.glob("*.hex"))
+        # 使用正则过滤，只保留完全匹配的文件
+        files = [f for f in all_files if re.fullmatch(pattern, f.name)]
+        logger.debug(f"定位 HEX 文件: 找到 {len(files)} 个主应用文件（排除 BOOT、FlashDriver 等）")
     elif file_type.lower() == "a2l":
-        pattern = "*.a2l"
+        # A2L 文件：匹配所有 *.a2l 文件
+        # 注意：source_path 应该指向 output 目录，该目录只包含处理后的 A2L 文件
+        files = list(source_path.glob("*.a2l"))
+        logger.debug(f"定位 A2L 文件: 找到 {len(files)} 个文件")
     else:
         raise ValueError(f"不支持的文件类型: {file_type}")
 
-    files = list(source_path.glob(pattern))
-    logger.debug(f"定位 {file_type.upper()} 文件: 找到 {len(files)} 个文件")
     return files
 
 
@@ -807,6 +830,7 @@ def rename_output_file(source_file: Path, target_folder: Path, timestamp: str) -
     - 按命名规范生成新文件名：
       - A2L: tmsAPP_upAdress[_时间戳].a2l
       - HEX: VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB[_时间戳：_YYYYMMDD_V99_HH_MM].hex
+    - 对于已含时间戳的 HEX 文件，替换时间戳部分
     - 返回目标文件路径
 
     Args:
@@ -829,6 +853,8 @@ def rename_output_file(source_file: Path, target_folder: Path, timestamp: str) -
         ...     result = rename_output_file(source, target, "_2026_02_14_16_35")
         ...     assert "2026_02_14_16_35" in result.name
     """
+    import re
+
     # 获取文件扩展名
     ext = source_file.suffix.lower()
 
@@ -836,26 +862,41 @@ def rename_output_file(source_file: Path, target_folder: Path, timestamp: str) -
     if ext == ".a2l":
         # A2L 文件命名: tmsAPP_upAdress[_时间戳].a2l
         new_name = f"tmsAPP_upAdress{timestamp}{ext}"
-    elif ext == ".hex":
-        # HEX 文件命名: VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB[_时间戳：_YYYYMMDD_V99_HH_MM].hex
-        # 转换时间戳格式: _YYYY_MM_DD_HH_MM -> _YYYYMMDD_V99_HH_MM
-        parts = timestamp.split("_")
-        if len(parts) >= 6:
-            hex_timestamp = f"_{parts[1]}{parts[2]}{parts[3]}_V99_{parts[4]}_{parts[5]}"
-        else:
-            hex_timestamp = timestamp
-        new_name = f"VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB{hex_timestamp}{ext}"
 
-        # 处理文件名冲突：如果目标文件已存在，添加源文件名作为后缀
-        target_file = target_folder / new_name
-        if target_file.exists():
-            # 使用源文件名（不含扩展名）作为后缀
-            stem = source_file.stem
-            # 插入源文件名到时间戳之前
-            if hex_timestamp:
-                new_name = f"VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB_{stem}{hex_timestamp}{ext}"
+    elif ext == ".hex":
+        # HEX 文件命名策略：
+        # 1. 检查源文件名是否已包含时间戳模式（_YYYYMMDD_V99_HH_MM）
+        # 2. 如果包含，替换时间戳部分
+        # 3. 如果不包含（如 BOOT HEX），使用标准前缀 + 新时间戳
+
+        stem = source_file.stem
+
+        # 时间戳模式：_YYYYMMDD_V99_HH_MM（8位日期 + _V99_ + 时分）
+        # 示例：_20260129_V99_00_32
+        timestamp_pattern = r'_\d{8}_V99_\d{2}_\d{2}'
+
+        if re.search(timestamp_pattern, stem):
+            # 源文件名已包含时间戳，替换它
+            # 转换新时间戳格式: _YYYY_MM_DD_HH_MM -> _YYYYMMDD_V99_HH_MM
+            parts = timestamp.split("_")
+            if len(parts) >= 6:
+                hex_timestamp = f"_{parts[1]}{parts[2]}{parts[3]}_V99_{parts[4]}_{parts[5]}"
             else:
-                new_name = f"VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB_{stem}{ext}"
+                hex_timestamp = timestamp
+
+            # 替换旧时间戳为新时间戳
+            new_name = re.sub(timestamp_pattern, hex_timestamp, stem) + ext
+
+        else:
+            # 源文件名不含时间戳（如 BOOT HEX、FlashDriver 等）
+            # 使用标准前缀 + 新时间戳
+            parts = timestamp.split("_")
+            if len(parts) >= 6:
+                hex_timestamp = f"_{parts[1]}{parts[2]}{parts[3]}_V99_{parts[4]}_{parts[5]}"
+            else:
+                hex_timestamp = timestamp
+            new_name = f"VIU_Chery_E0Y_FL1_R_CYT4BFV3_AB{hex_timestamp}{ext}"
+
     else:
         new_name = source_file.name
 
@@ -864,13 +905,13 @@ def rename_output_file(source_file: Path, target_folder: Path, timestamp: str) -
 
 
 def move_output_file(source_file: Path, target_folder: Path, timestamp: str) -> Path:
-    """移动输出文件
+    """复制输出文件（复制而非移动，保留源文件）
 
     Story 2.12 - 任务 3.1-3.6:
     - 接受源文件路径、目标文件夹路径、新文件名参数
-    - 使用 pathlib.Path.rename() 移动文件（跨卷使用 shutil.move）
-    - 验证移动后的文件存在
-    - 验证移动后的文件大小正确
+    - 使用 shutil.copy2() 复制文件（保留文件元数据）
+    - 验证复制后的文件存在
+    - 验证复制后的文件大小正确
     - 返回目标文件路径
 
     Args:
@@ -883,7 +924,7 @@ def move_output_file(source_file: Path, target_folder: Path, timestamp: str) -> 
 
     Raises:
         FileNotFoundError: 源文件不存在
-        FileMoveError: 文件移动失败
+        FileMoveError: 文件复制失败
 
     Examples:
         >>> from pathlib import Path
@@ -896,7 +937,7 @@ def move_output_file(source_file: Path, target_folder: Path, timestamp: str) -> 
         ...     source.write_text("test content")
         ...     result = move_output_file(source, target, "_2026_02_14_16_35")
         ...     assert result.exists()
-        ...     assert not source.exists()
+        ...     assert source.exists()  # 源文件仍然存在
     """
     if not source_file.exists():
         logger.error(f"源文件不存在: {source_file}")
@@ -908,16 +949,16 @@ def move_output_file(source_file: Path, target_folder: Path, timestamp: str) -> 
     # 生成目标文件路径
     target_file = rename_output_file(source_file, target_folder, timestamp)
 
-    logger.debug(f"移动文件: {source_file} -> {target_file}")
+    logger.debug(f"复制文件: {source_file} -> {target_file}")
 
     try:
-        # 移动文件（跨卷使用 shutil.move）
-        shutil.move(str(source_file), str(target_file))
+        # 复制文件（使用 copy2 保留元数据）
+        shutil.copy2(str(source_file), str(target_file))
     except Exception as e:
-        logger.error(f"文件移动失败: {source_file} -> {target_file} - {e}")
+        logger.error(f"文件复制失败: {source_file} -> {target_file} - {e}")
         from utils.errors import FileMoveError
         raise FileMoveError(
-            f"文件移动失败: {source_file} -> {target_file}",
+            f"文件复制失败: {source_file} -> {target_file}",
             suggestions=[
                 "检查目标文件夹权限",
                 "检查磁盘空间",
@@ -925,11 +966,11 @@ def move_output_file(source_file: Path, target_folder: Path, timestamp: str) -> 
             ]
         ) from e
 
-    # 验证移动成功 (Story 2.12 - 任务 3.4, 3.5)
+    # 验证复制成功 (Story 2.12 - 任务 3.4, 3.5)
     if not target_file.exists():
         from utils.errors import FileMoveError
         raise FileMoveError(
-            f"文件移动后验证失败: {target_file}",
+            f"文件复制后验证失败: {target_file}",
             suggestions=["查看详细日志", "联系技术支持"]
         )
 
@@ -938,11 +979,11 @@ def move_output_file(source_file: Path, target_folder: Path, timestamp: str) -> 
     if new_size != original_size:
         from utils.errors import FileMoveError
         raise FileMoveError(
-            f"文件移动后大小不一致: 原始 {original_size} 字节，新 {new_size} 字节",
+            f"文件复制后大小不一致: 原始 {original_size} 字节，新 {new_size} 字节",
             suggestions=["检查磁盘空间", "检查文件系统错误"]
         )
 
-    logger.debug(f"文件移动成功: {target_file}")
+    logger.debug(f"文件复制成功: {target_file}")
     return target_file
 
 

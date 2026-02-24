@@ -78,9 +78,11 @@ class ProcessExitCodeError(ProcessError):
     Attributes:
         process_name: 进程名称
         exit_code: 退出码
+        output: 进程输出内容（包含错误信息）
     """
 
-    def __init__(self, process_name: str, exit_code: int):
+    def __init__(self, process_name: str, exit_code: int, output: str = ""):
+        self.output = output
         super().__init__(
             process_name,
             f"{process_name} 异常退出（退出码: {exit_code}）",
@@ -92,6 +94,14 @@ class ProcessExitCodeError(ProcessError):
             ]
         )
         self.exit_code = exit_code
+
+    def __str__(self):
+        base_msg = super().__str__()
+        if self.output:
+            # 截取最后 1000 个字符的输出，避免消息过长
+            output_preview = self.output[-1000:] if len(self.output) > 1000 else self.output
+            return f"{base_msg}\n\n输出信息:\n{output_preview}"
+        return base_msg
 
 
 class ConfigError(Exception):
