@@ -1,0 +1,31 @@
+# MBD_CICDKits 项目配置模板
+# 复制此文件并重命名为 YourProject.toml，然后修改路径
+
+name = "YourProjectName"
+
+# Simulink 工程目录
+simulink_path = "D:/MATLAB/Project/YourProject"
+
+# MATLAB 代码输出目录（将复制到 IAR 工程）
+matlab_code_path = "D:/IDE/YourProject/600-CICD/02_genHex/M7/src/TmsApp_APP"
+
+# A2L 源文件路径
+a2l_path = "D:/MATLAB/Project/YourProject/22_A2L/TmsApp.a2l"
+
+# 最终输出目录
+target_path = "D:/IDE/YourProject/600-CICD/05_finObj"
+
+# IAR 工程文件路径
+iar_project_path = "D:/IDE/YourProject/600-CICD/02_genHex/Neusar_CYT4BF.eww"
+
+# A2L 工具目录
+a2l_tool_path = "D:/IDE/YourProject/600-CICD/04_genA2L"
+
+# MATLAB 配置
+matlab_reuse_existing = true      # 复用已打开的 MATLAB 实例
+matlab_close_after_build = true   # 构建完成后关闭 MATLAB
+matlab_timeout = 60               # 超时时间（分钟）
+matlab_memory_limit = "2GB"       # 内存限制
+
+[custom_params]
+# 自定义参数（可选）

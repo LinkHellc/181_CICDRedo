@@ -155,6 +155,10 @@ MBD_CICD_Obj_*/
 *.a2l
 *.hex
 
+# User project configs (contain local paths)
+configs/projects/*.toml
+configs/projects/last_project.json
+
 # BMad workflow output (keep markdown, ignore temporary files)
 _bmad-output/**/*.tmp
 _bmad-output/**/*.log

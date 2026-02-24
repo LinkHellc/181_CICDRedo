@@ -34,19 +34,26 @@ from utils.errors import (
 logger = logging.getLogger(__name__)
 
 
-def get_config_dir() -> Path:
-    """获取平台相关的配置目录
-
-    遵循 AC #1: 保存到 %APPDATA%/MBD_CICDKits/projects/ (Windows)
-    或 ~/.config/mbd_cicdkits/projects/ (Linux/macOS)
+def get_project_root() -> Path:
+    """获取项目根目录
 
     Returns:
-        平台相关的配置目录路径
+        项目根目录路径
     """
-    if sys.platform == "win32":  # Windows
-        return Path.home() / "AppData" / "Roaming" / "MBD_CICDKits" / "projects"
-    else:  # macOS/Linux
-        return Path.home() / ".config" / "mbd_cicdkits" / "projects"
+    # config.py 在 src/core/ 目录下，向上两级到达项目根目录
+    return Path(__file__).parent.parent.parent
+
+
+def get_config_dir() -> Path:
+    """获取项目配置目录
+
+    配置保存在项目根目录下的 configs/projects/ 文件夹，
+    方便分享和导入。
+
+    Returns:
+        项目配置目录路径
+    """
+    return get_project_root() / "configs" / "projects"
 
 
 # 配置存储位置
@@ -797,3 +804,90 @@ def load_workflow_config(filepath: Path) -> tuple[list, list[str]]:
         logger.exception(error_msg)
         errors.append(error_msg)
         return [], errors
+
+
+# =============================================================================
+# 上次项目配置功能（自动记忆）
+# =============================================================================
+
+LAST_PROJECT_FILE = "last_project.json"
+
+
+def get_last_project_file() -> Path:
+    """获取上次项目配置文件的路径
+
+    Returns:
+        Path: 上次项目配置文件路径
+    """
+    return CONFIG_DIR / LAST_PROJECT_FILE
+
+
+def save_last_project(project_name: str) -> bool:
+    """保存上次使用的项目配置
+
+    Args:
+        project_name: 项目名称
+
+    Returns:
+        bool: 保存是否成功
+    """
+    try:
+        import json
+
+        # 确保配置目录存在
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+        last_project_file = get_last_project_file()
+
+        # 保存项目名称和时间戳
+        data = {
+            "project_name": project_name,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        with open(last_project_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"已保存上次项目: {project_name}")
+        return True
+
+    except Exception as e:
+        logger.error(f"保存上次项目失败: {e}")
+        return False
+
+
+def load_last_project() -> Optional[str]:
+    """加载上次使用的项目配置
+
+    Returns:
+        str | None: 上次使用的项目名称，如果不存在则返回 None
+    """
+    try:
+        import json
+
+        last_project_file = get_last_project_file()
+
+        if not last_project_file.exists():
+            logger.debug("上次项目配置文件不存在")
+            return None
+
+        with open(last_project_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        project_name = data.get("project_name")
+        if project_name:
+            logger.info(f"已加载上次项目: {project_name}")
+            # 验证项目是否仍然存在
+            if project_name in list_saved_projects():
+                return project_name
+            else:
+                logger.warning(f"上次项目 '{project_name}' 不存在，已删除")
+                # 删除无效的配置文件
+                last_project_file.unlink()
+                return None
+
+        return None
+
+    except Exception as e:
+        logger.error(f"加载上次项目失败: {e}")
+        return None

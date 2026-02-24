@@ -23,7 +23,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QSize
 from PyQt6.QtGui import QAction, QFont, QIcon
 from PyQt6.QtCore import Qt as QtConstants
 
-from core.config import list_saved_projects, load_config
+from core.config import list_saved_projects, load_config, save_last_project, load_last_project
 from utils.errors import ConfigLoadError
 from core.models import ProjectConfig, WorkflowConfig, BuildContext, BuildState
 from core.workflow import validate_workflow_config, execute_workflow
@@ -86,6 +86,21 @@ class MainWindow(QMainWindow):
 
         # 加载项目列表
         self._refresh_project_list()
+
+        # 自动加载上次使用的项目
+        last_project = load_last_project()
+        if last_project:
+            logger.info(f"自动加载上次项目: {last_project}")
+            # 在下拉框中查找并选择该项目
+            index = self.project_combo.findData(last_project)
+            if index >= 0:
+                self.project_combo.setCurrentIndex(index)
+                # 触发项目加载 - 直接调用加载方法
+                self._load_project_to_ui(last_project)
+            else:
+                logger.warning(f"上次项目 '{last_project}' 不在项目列表中")
+        else:
+            logger.info("没有上次项目记录")
 
         logger.info(f"主窗口初始化完成 (主题: {theme})")
 
@@ -509,8 +524,11 @@ class MainWindow(QMainWindow):
         Args:
             project_name: 选中的项目名称
         """
-        if project_name == "🔽 选择项目...":
+        # 忽略空字符串（clear() 触发的信号）和默认提示文本
+        if not project_name or project_name == "🔽 选择项目...":
             self._clear_display()
+            if not project_name:
+                return  # clear() 触发的信号，不做任何处理
             self.status_bar.showMessage("💡 请选择或新建项目")
         else:
             self.status_bar.showMessage(f"📌 已选择: {project_name}")
@@ -551,6 +569,9 @@ class MainWindow(QMainWindow):
 
         # 保存当前配置
         self._current_config = config
+
+        # 保存上次使用的项目
+        save_last_project(project_name)
 
         # 显示成功状态消息
         self.status_bar.showMessage(f"✅ 已加载项目: {project_name}")
@@ -643,21 +664,15 @@ class MainWindow(QMainWindow):
         try:
             self.status_bar.showMessage("🔍 正在验证配置...")
 
-            # 获取工作流配置（如果有）
-            # 优先使用 custom_params 中的 workflow_config
-            workflow_config = None
+            # 获取工作流配置 - 使用默认完整流程
             if "workflow_config" in self._current_config.custom_params:
                 workflow_data = self._current_config.custom_params["workflow_config"]
                 workflow_config = WorkflowConfig.from_dict(workflow_data)
+                # 如果没有配置阶段，使用默认工作流
+                if not workflow_config.stages:
+                    workflow_config = self._get_default_workflow()
             else:
-                # 如果没有自定义工作流，创建一个默认的空配置
-                workflow_config = WorkflowConfig(
-                    id="default",
-                    name="默认工作流",
-                    description="默认工作流配置",
-                    estimated_time=0,
-                    stages=[]
-                )
+                workflow_config = self._get_default_workflow()
 
             # 执行验证
             result = validate_workflow_config(workflow_config, self._current_config)
@@ -688,6 +703,24 @@ class MainWindow(QMainWindow):
                 "请查看日志获取详细信息。"
             )
 
+    def _get_default_workflow(self) -> WorkflowConfig:
+        """获取默认的完整流程工作流配置"""
+        from core.models import StageConfig
+        return WorkflowConfig(
+            id="full_pipeline",
+            name="完整流程",
+            description="跳过 MATLAB 代码生成，从文件处理开始",
+            estimated_time=15,
+            stages=[
+                StageConfig(name="matlab_gen", enabled=False, timeout=1800),
+                StageConfig(name="file_process", enabled=True, timeout=300),
+                StageConfig(name="file_move", enabled=True, timeout=300),
+                StageConfig(name="iar_compile", enabled=True, timeout=1200),
+                StageConfig(name="a2l_process", enabled=True, timeout=600),
+                StageConfig(name="package", enabled=True, timeout=60),
+            ]
+        )
+
     def _start_build(self):
         """开始构建流程 (Story 2.4 Task 3, 7)"""
         if not self._current_config:
@@ -702,19 +735,15 @@ class MainWindow(QMainWindow):
         # 在开始构建前自动验证配置（Story 2.3 Task 7.4, Story 2.4 Task 7）
         self.status_bar.showMessage("🔍 开始前验证配置...")
 
-        # 获取工作流配置
-        workflow_config = None
+        # 获取工作流配置 - 使用默认完整流程
         if "workflow_config" in self._current_config.custom_params:
             workflow_data = self._current_config.custom_params["workflow_config"]
             workflow_config = WorkflowConfig.from_dict(workflow_data)
+            # 如果没有配置阶段，使用默认工作流
+            if not workflow_config.stages:
+                workflow_config = self._get_default_workflow()
         else:
-            workflow_config = WorkflowConfig(
-                id="default",
-                name="默认工作流",
-                description="默认工作流配置",
-                estimated_time=0,
-                stages=[]
-            )
+            workflow_config = self._get_default_workflow()
 
         # 执行验证 (Story 2.4 Task 7.1)
         result = validate_workflow_config(workflow_config, self._current_config)
