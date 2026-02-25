@@ -21,13 +21,12 @@ classification:
   toolType: critical_dev_tool
 keyInsights:
   - 高可靠性要求 - 关键开发路径工具
-  - 外部工具集成 - MATLAB Engine API、IAR 命令行
+  - 外部工具集成 - IAR 命令行、Python A2L 处理
   - 5阶段自动化流程 - 配置→MATLAB→IAR→A2L→归纳
   - 离线桌面应用 - 无网络依赖，本地配置存储
   - 渐进式架构 - 从简单开始，按需演进
   - 借鉴不使用 - 学习成熟实践但保持架构控制权
-  - 进程管理是关键单点 - 独立模块可测试
-  - 文件操作原子性 - 复制-验证-删除模式
+  - 纯Python实现A2L处理 - 移除MATLAB Engine依赖，简化部署
 ---
 
 # Architecture Decision Document
@@ -43,8 +42,15 @@ _本文档通过协作式逐步发现构建。各章节将随着我们一起完�
 | 工作流步骤完成 | Step 1: 初始化, Step 2: 项目上下文分析, Step 3: 架构启动点, Step 4: 核心架构决策, Step 5: 实现模式, Step 6: 项目结构 |
 | 派对模式审查 | ✅ 已完成 (2026-02-03) |
 | 审查结果 | ✅ 有条件批准 (条件已满足) |
-| 文档版本 | 0.7 (草稿 - 项目结构已添加) |
-| 最后更新 | 2026-02-03 |
+| 文档版本 | 0.8 (更新 - 移除 MATLAB Engine 依赖) |
+| 最后更新 | 2026-02-25 |
+
+### 变更记录
+
+| 日期 | 版本 | 变更内容 |
+|------|------|---------|
+| 2026-02-25 | 0.8 | 移除 MATLAB Engine API 依赖，改用纯 Python 实现 A2L 地址替换 |
+| 2026-02-03 | 0.7 | 初始版本 - 项目结构已添加 |
 
 ---
 
@@ -76,8 +82,9 @@ _本文档通过协作式逐步发现构建。各章节将随着我们一起完�
 |------|------|
 | 开发语言 | Python 3.10+ (64位) |
 | UI 框架 | PyQt6 |
-| MATLAB 集成 | MATLAB Engine API for Python |
+| MATLAB 集成 | 预留接口（暂不实现） |
 | IAR 集成 | 命令行接口 (iarbuild.exe) |
+| A2L 处理 | 纯 Python 实现（pyelftools 解析 ELF） |
 | 配置格式 | TOML (项目配置)、JSON (工作流配置) |
 | 打包方式 | PyInstaller 单文件 exe |
 
@@ -121,9 +128,10 @@ _本文档通过协作式逐步发现构建。各章节将随着我们一起完�
 ### Technical Constraints & Dependencies
 
 **外部依赖（用户环境预装）：**
-- MATLAB R2020a 或更高版本（无法打包 Runtime）
+- MATLAB R2020a 或更高版本（代码生成功能预留，暂不需要）
 - IAR Embedded Workbench for ARM 9.x
-- MATLAB Engine API for Python
+
+> ⚠️ **变更说明 (2026-02-25)：** 已移除 MATLAB Engine API for Python 依赖。A2L 地址替换功能改用纯 Python 实现（pyelftools 解析 ELF）。
 
 **平台约束：**
 - Windows 10/11 (64-bit) 仅
@@ -244,15 +252,20 @@ mbd_cicdkits/
 │   ├── stages/                   # 工作流阶段（函数模块）
 │   │   ├── __init__.py
 │   │   ├── base.py               # 阶段接口定义
-│   │   ├── matlab_gen.py         # 阶段 1: MATLAB 代码生成
+│   │   ├── matlab_gen.py         # 阶段 1: MATLAB 代码生成（预留接口）
 │   │   ├── file_process.py       # 阶段 2: 文件处理
 │   │   ├── iar_compile.py        # 阶段 3: IAR 编译
-│   │   ├── a2l_process.py        # 阶段 4: A2L 处理
+│   │   ├── a2l_process.py        # 阶段 4: A2L 处理（Python 实现）
 │   │   └── package.py            # 阶段 5: 文件归纳
 │   ├── integrations/             # 外部工具集成
 │   │   ├── __init__.py
-│   │   ├── matlab.py             # MATLAB Engine API
+│   │   ├── matlab.py             # MATLAB 预留接口（暂不实现）
 │   │   └── iar.py                # IAR 命令行
+│   ├── a2l/                      # A2L 处理模块（新增）
+│   │   ├── __init__.py
+│   │   ├── elf_parser.py         # ELF 文件解析（pyelftools）
+│   │   ├── a2l_parser.py         # A2L 文件解析
+│   │   └── address_updater.py    # A2L 地址更新
 │   └── utils/                   # 工具函数
 │       ├── __init__.py
 │       ├── process_mgr.py       # 进程管理（防御性）
@@ -391,6 +404,40 @@ Positive:
 
 Negative:
   - 风格不统一（但适应实际需求）
+```
+
+### ADR-005: 移除 MATLAB Engine 依赖
+
+```
+Status: Accepted
+Date: 2026-02-25
+
+Context:
+PyInstaller 打包后，MATLAB Engine API for Python 在目标机器上无法正常工作。
+这导致 A2L 处理阶段失败，影响了工具的部署和分发能力。
+
+Decision:
+移除 MATLAB Engine API for Python 依赖，采用以下策略：
+- MATLAB 代码生成功能：保留接口，暂不实现（返回成功状态）
+- A2L 地址替换功能：改用纯 Python 实现
+  - 使用 pyelftools 解析 ELF 文件提取符号地址
+  - 基于原有 MATLAB 脚本逻辑实现 Python 版本
+- 环境检测：移除 MATLAB Engine API 检测
+
+Consequences:
+Positive:
+  + 简化部署 - 无需在目标机器配置 MATLAB Engine
+  + 提高可靠性 - 纯 Python 实现更稳定
+  + 降低打包复杂度 - 减少依赖冲突风险
+  + 保持功能完整 - A2L 处理功能不受影响
+
+Negative:
+  - 需要实现 Python 版 A2L 地址替换（基于原有脚本）
+  - MATLAB 代码生成功能暂不可用（预留接口）
+
+Related:
+- Sprint Change Proposal: sprint-change-proposal-2026-02-25.md
+- Affected Stories: 2.5, 2.9, 5.1, 5.2
 ```
 
 ---
@@ -534,9 +581,10 @@ if proc.returncode != 0:
 ```
 
 **版本**:
-- MATLAB Engine API for Python
 - subprocess (标准库)
 - psutil (第三方，用于进程清理)
+
+> ⚠️ **变更说明 (2026-02-25)：** 已移除 MATLAB Engine API for Python 依赖。MATLAB 代码生成功能预留接口暂不实现。
 
 **影响模块**: Epic 2 (工作流执行), Epic 4 (错误处理)
 
@@ -1733,17 +1781,23 @@ mbd_cicdkits/
 │   ├── stages/                      # 工作流阶段（函数模块）
 │   │   ├── __init__.py
 │   │   ├── base.py                  # 阶段基类和接口定义
-│   │   ├── matlab_gen.py            # 阶段1: MATLAB 代码生成
+│   │   ├── matlab_gen.py            # 阶段1: MATLAB 代码生成（预留接口）
 │   │   ├── file_process.py          # 阶段2: 文件处理
 │   │   ├── iar_compile.py           # 阶段3: IAR 编译
-│   │   ├── a2l_process.py           # 阶段4: A2L 处理
+│   │   ├── a2l_process.py           # 阶段4: A2L 处理（Python 实现）
 │   │   └── package.py               # 阶段5: 文件归纳
 │   │
 │   ├── integrations/                # 外部工具集成
 │   │   ├── __init__.py
-│   │   ├── matlab.py                # MATLAB Engine API 集成
+│   │   ├── matlab.py                # MATLAB 预留接口（暂不实现）
 │   │   ├── iar.py                   # IAR 命令行集成
 │   │   └── env_detector.py          # 环境检测（MATLAB/IAR 版本检测）
+│   │
+│   ├── a2l/                         # A2L 处理模块（新增 2026-02-25）
+│   │   ├── __init__.py
+│   │   ├── elf_parser.py            # ELF 文件解析（pyelftools）
+│   │   ├── a2l_parser.py            # A2L 文件解析
+│   │   └── address_updater.py       # A2L 地址更新
 │   │
 │   └── utils/                       # 工具函数
 │       ├── __init__.py
@@ -1960,9 +2014,12 @@ MainWindow (UI Thread)
 
 | 外部工具 | 集成方式 | 接口文件 |
 |---------|---------|---------|
-| MATLAB | MATLAB Engine API | `src/integrations/matlab.py` |
+| MATLAB | 预留接口（暂不实现） | `src/integrations/matlab.py` |
 | IAR | 命令行 (subprocess) | `src/integrations/iar.py` |
+| A2L 处理 | Python (pyelftools) | `src/a2l/address_updater.py` |
 | 文件系统 | pathlib + shutil | `src/utils/file_ops.py` |
+
+> ⚠️ **变更说明 (2026-02-25)：** MATLAB 集成改为预留接口。A2L 地址替换改用纯 Python 实现。
 
 #### Data Flow
 

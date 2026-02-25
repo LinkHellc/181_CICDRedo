@@ -51,16 +51,17 @@ development_status:
   epic-1-retrospective: done
 
   # Epic 2: 工作流执行
+  # ⚠️ CHANGE-2026-02-25: 移除 MATLAB Engine 依赖，改用纯 Python 实现
   epic-2: done
   2-1-select-predefined-workflow-template: done
   2-2-load-custom-workflow-config: done
   2-3-validate-workflow-config-effectiveness: done
   2-4-start-automated-build-process: done
-  2-5-execute-matlab-code-generation-phase: done
+  2-5-execute-matlab-code-generation-phase: done  # 改为预留接口
   2-6-extract-process-code-files: done
   2-7-move-code-files-specified-directory: done
   2-8-invoke-iar-command-line-compile: done
-  2-9-update-a2l-file-variable-addresses: done
+  2-9-update-a2l-file-variable-addresses: done  # 纯 Python 实现 (pyelftools) - 完成
   2-10-replace-a2l-file-xcp-header-content: done
   2-11-create-timestamp-target-folder: done
   2-12-move-hex-a2l-files-target-folder: done
@@ -91,9 +92,11 @@ development_status:
   epic-4-retrospective: optional
 
   # Epic 5: 环境验证与文件管理
+  # ⚠️ CHANGE-2026-02-25: 5-1/5-2 移除 MATLAB Engine 检测，仅保留 MATLAB 安装检测
+  # ✅ 已完成：run_ui_with_check.py 已移除 MATLAB Engine 检测
   epic-5: backlog
-  5-1-startup-detect-matlab-installation: backlog
-  5-2-validate-matlab-version-compatibility: backlog
+  5-1-startup-detect-matlab-installation: backlog  # MATLAB Engine 检测已移除
+  5-2-validate-matlab-version-compatibility: backlog  # Engine API 版本检测已移除
   5-3-startup-detect-iar-installation: backlog
   5-4-confirm-before-clearing: backlog
   5-5-backup-target-directory-existing-files: backlog

@@ -48,14 +48,15 @@ from utils.errors import (
 logger = logging.getLogger(__name__)
 
 # MATLAB Engine API 导入（可选依赖）
-# 如果未安装，会在运行时检测
+# ADR-005: MATLAB Engine 不再是必需依赖，代码生成功能已改为预留接口
 try:
     import matlab.engine
     MATLAB_ENGINE_AVAILABLE = True
 except ImportError:
     MATLAB_ENGINE_AVAILABLE = False
     matlab = None
-    logger.warning("MATLAB Engine API for Python 未安装")
+    # 不再显示警告，因为 MATLAB Engine 已不是必需依赖
+    logger.debug("MATLAB Engine API for Python 未安装（可选）")
 
 # psutil 导入（可选依赖，用于进程检测）
 try:

@@ -10,6 +10,14 @@ workflowStatus: complete
 
 This document provides the complete epic and story breakdown for 181_CICDRedo, decomposing the requirements from the PRD into implementable stories.
 
+### 变更记录
+
+| 日期 | 变更内容 |
+|------|---------|
+| 2026-02-25 | Story 2.5/2.9/5.1/5.2 更新：移除 MATLAB Engine 依赖，改用纯 Python 实现 A2L 地址替换 |
+
+> 详细变更内容请参见：`sprint-change-proposal-2026-02-25.md`
+
 ## Requirements Inventory
 
 ### Functional Requirements
@@ -381,20 +389,20 @@ This document provides the complete epic and story breakdown for 181_CICDRedo, d
 
 #### Story 2.5: 执行 MATLAB 代码生成阶段
 
+> ⚠️ **变更说明 (2026-02-25)：** 此功能改为预留接口，暂不实现。
+
 作为嵌入式开发工程师，
-我想要系统自动调用 MATLAB 生成代码，
-以便替代手动运行 Simulink 编译。
+我想要系统预留 MATLAB 代码生成接口，
+以便未来需要时可以扩展此功能。
 
 **Acceptance Criteria:**
 
 **Given** 构建流程已启动且进入 MATLAB 代码生成阶段
 **When** 系统执行代码生成
-**Then** 系统启动 MATLAB 进程（使用 MATLAB Engine API）
-**And** 系统调用 `genCode.m` 脚本
-**And** 系统捕获 MATLAB 输出并实时显示在日志窗口
-**And** 系统监控进程状态（运行中/完成/失败）
+**Then** 系统返回成功状态（预留接口，暂不执行实际操作）
+**And** 系统在日志中记录"MATLAB 代码生成阶段已跳过（预留接口）"
 **And** 系统记录阶段开始和结束时间
-**And** 如果代码生成失败，系统停止构建并报告错误
+**And** 系统继续执行下一阶段
 
 ---
 
@@ -467,6 +475,8 @@ This document provides the complete epic and story breakdown for 181_CICDRedo, d
 
 #### Story 2.9: 更新 A2L 文件变量地址
 
+> ⚠️ **变更说明 (2026-02-25)：** 改用纯 Python 实现，基于原有 MATLAB 脚本逻辑。移除 MATLAB Engine 依赖。
+
 作为嵌入式开发工程师，
 我想要系统自动更新 A2L 文件中的变量地址，
 以便匹配新编译的 ELF 文件。
@@ -475,13 +485,17 @@ This document provides the complete epic and story breakdown for 181_CICDRedo, d
 
 **Given** IAR 编译成功生成 ELF 文件
 **When** 系统进入 A2L 更新阶段
-**Then** 系统通过 MATLAB Engine 执行命令：
-  ```matlab
-  rtw.asap2SetAddress('tmsAPP[_年_月_日_时_分].a2l', 'CYT4BF_M7_Master.elf')
-  ```
-**And** 系统捕获 MATLAB 命令执行结果
+**Then** 系统使用 Python 解析 ELF 文件提取符号地址（使用 pyelftools）
+**And** 系统解析 A2L 文件结构
+**And** 系统更新 A2L 文件中的变量地址为 ELF 文件中的对应地址
 **And** 系统验证 A2L 文件已更新
+**And** 系统在日志中记录更新的变量数量
 **And** 如果更新失败，系统报告错误并继续
+
+**技术实现：**
+- 使用 `pyelftools` 库解析 ELF 文件
+- 基于原有 MATLAB 脚本逻辑实现 Python 版本
+- 模块位置：`src/a2l/address_updater.py`
 
 ---
 
@@ -863,6 +877,8 @@ This document provides the complete epic and story breakdown for 181_CICDRedo, d
 
 #### Story 5.1: 启动时检测 MATLAB 安装
 
+> ⚠️ **变更说明 (2026-02-25)：** 移除 MATLAB Engine API 检测。MATLAB 代码生成功能已改为预留接口。
+
 作为嵌入式开发工程师，
 我想要系统在启动时检测 MATLAB 是否已安装，
 以便提前发现环境问题。
@@ -873,16 +889,20 @@ This document provides the complete epic and story breakdown for 181_CICDRedo, d
 **When** 应用程序初始化
 **Then** 系统检查 MATLAB 安装路径
 **And** 系统验证 MATLAB 可执行文件存在
-**And** 系统检查 MATLAB Engine API for Python 是否可导入
+**And** ~~系统检查 MATLAB Engine API for Python 是否可导入~~（已移除）
 **And** 如果检测失败，系统显示友好的错误提示：
   - "未检测到 MATLAB 安装"
   - "请安装 MATLAB R2020a 或更高版本"
-  - "请确保 MATLAB Engine API for Python 已安装"
+  - ~~"请确保 MATLAB Engine API for Python 已安装"~~（已移除）
 **And** 系统记录检测结果到日志
+
+**注意：** 由于 MATLAB 代码生成功能已改为预留接口，MATLAB 检测为可选功能。
 
 ---
 
 #### Story 5.2: 验证 MATLAB 版本兼容性
+
+> ⚠️ **变更说明 (2026-02-25)：** 移除 Engine API 版本检测。简化为仅检测 MATLAB 版本。
 
 作为嵌入式开发工程师，
 我想要系统验证 MATLAB 版本是否符合要求，
@@ -894,12 +914,15 @@ This document provides the complete epic and story breakdown for 181_CICDRedo, d
 **When** 系统执行版本验证
 **Then** 系统读取 MATLAB 版本信息
 **And** 系统比较版本号与最低要求（R2020a）
+**And** ~~系统检查 Engine API 版本~~（已移除）
 **And** 如果版本符合要求，系统显示版本信息
 **And** 如果版本不符合要求，系统显示：
   - 当前检测到的版本
   - 最低要求的版本
   - 升级建议
 **And** 系统可选阻止构建（基于用户配置）
+
+**注意：** 由于 MATLAB 代码生成功能已改为预留接口，此检测为可选功能。
 
 ---
 

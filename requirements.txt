@@ -8,6 +8,9 @@ tomli>=2.0.0; python_version < "3.11"
 # tomli_w is needed for writing TOML (all versions)
 tomli-w>=1.0.0
 
+# ELF file parsing (A2L address update)
+pyelftools>=0.31
+
 # Testing
 pytest>=7.4.0
 pytest-qt>=4.2.0

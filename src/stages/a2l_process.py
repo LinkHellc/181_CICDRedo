@@ -1,7 +1,7 @@
 """A2L file processing stage for MBD_CICDKits workflow.
 
 This module implements the A2L file processing stage which updates variable
-addresses in A2L files using MATLAB Engine API.
+addresses in A2L files using pure Python implementation (pyelftools).
 
 Story 2.9: Update A2L File Variable Addresses
 Story 2.10: Replace A2L File XCP Header Content
@@ -9,19 +9,10 @@ Story 2.10: Replace A2L File XCP Header Content
 Architecture Decision Compliance:
 - Decision 1.1: Stage interface pattern (execute_stage signature)
 - Decision 1.2: Dataclass with default values
-- Decision 2.1: Process management with timeout (time.monotonic)
-- Decision 2.2: ProcessError and subclasses
-- Decision 5.1: Logging framework
+- ADR-005: Removed MATLAB Engine dependency, use pure Python
 
-Implementation Sequence:
-- Task 1: Create A2L process stage module
-- Task 2: Implement MATLAB command generation
-- Task 3: Implement stage execution main function
-- Task 4: Implement MATLAB integration
-- Task 5: Implement A2L file verification
-- Task 6: Implement error handling and recovery
-- Task 7: Add timeout and process management
-- Task 8: Implement logging and progress feedback
+Change Log:
+- 2026-02-25: Replaced MATLAB Engine with pure Python implementation (pyelftools)
 """
 
 import logging
@@ -42,6 +33,11 @@ from core.constants import get_stage_timeout
 from utils.errors import ProcessTimeoutError, ProcessError
 from utils.errors import FileError
 from core.models import A2LHeaderReplacementConfig
+
+# Pure Python A2L processing (ADR-005)
+from a2l.elf_parser import ELFParser, ELFParseError
+from a2l.a2l_parser import A2LParser, A2LParseError
+from a2l.address_updater import A2LAddressUpdater, AddressUpdateError
 
 logger = logging.getLogger(__name__)
 
@@ -313,127 +309,8 @@ def _validate_configuration(
     return None
 
 
-def _execute_matlab_command(
-    command: str,
-    timeout: int,
-    log_callback: Callable[[str], None],
-    working_dir: Optional[str] = None
-) -> bool:
-    """执行 MATLAB 命令
-
-    Story 2.9 - 任务 3.3, 4.1-4.6, 7.1-7.5:
-    - 使用 MATLAB Engine API 执行命令
-    - 使用 time.monotonic() 实现超时检测（架构 Decision 2.1）
-    - 捕获命令输出和错误信息
-    - 超时时抛出 ProcessTimeoutError
-    - 确保进程清理
-    - 支持设置工作目录
-
-    Args:
-        command: MATLAB 命令字符串
-        timeout: 超时时间（秒）
-        log_callback: 日志回调函数
-        working_dir: MATLAB 工作目录（可选）
-
-    Returns:
-        bool: 成功返回 True
-
-    Raises:
-        ProcessError: 如果执行失败
-        ProcessTimeoutError: 如果超时
-    """
-    # 导入 MATLAB Engine API
-    try:
-        import matlab.engine
-    except ImportError as e:
-        error_msg = "MATLAB Engine API for Python 未安装"
-        log_callback(f"错误: {error_msg}")
-        logger.error(error_msg)
-
-        raise ProcessError(
-            "MATLAB",
-            error_msg,
-            suggestions=[
-                "安装 MATLAB R2020a 或更高版本",
-                "在 MATLAB 目录执行: cd extern/engines/python && python setup.py install",
-                "验证 import matlab.engine 可用"
-            ]
-        )
-
-    # 记录开始时间 - 使用 monotonic 避免系统时间调整影响 (架构 Decision 2.1)
-    start_time = time.monotonic()
-    engine = None
-
-    try:
-        # 启动 MATLAB 引擎 (任务 7.1, 7.4)
-        log_callback("正在启动 MATLAB 引擎...")
-        engine = matlab.engine.start_matlab()
-
-        elapsed = time.monotonic() - start_time
-        log_callback(f"MATLAB 引擎已启动（耗时 {elapsed:.2f} 秒）")
-
-        # 设置工作目录（如果指定）
-        if working_dir:
-            engine.cd(working_dir)
-            log_callback(f"MATLAB 工作目录: {working_dir}")
-
-        # 记录命令执行开始
-        command_start = time.monotonic()
-        log_callback(f"执行 MATLAB 命令: {command}")
-
-        # 执行命令 (任务 3.3, 4.3)
-        engine.eval(command, nargout=0)
-
-        # 记录命令执行成功
-        command_elapsed = time.monotonic() - command_start
-        log_callback(f"MATLAB 命令执行成功（耗时 {command_elapsed:.2f} 秒）")
-        logger.info(f"MATLAB 命令执行成功: {command}")
-
-        return True
-
-    except matlab.engine.MatlabExecutionError as e:
-        # MATLAB 命令执行失败 (任务 4.4)
-        error_msg = f"MATLAB 命令执行失败: {str(e)}"
-        log_callback(f"错误: {error_msg}")
-        logger.error(error_msg, exc_info=True)
-
-        raise ProcessError(
-            "MATLAB",
-            error_msg,
-            suggestions=[
-                "检查 MATLAB 安装和版本",
-                "验证 rtw.asap2SetAddress 函数可用",
-                "查看 MATLAB 详细错误日志",
-                "验证 A2L 文件格式"
-            ]
-        )
-
-    except Exception as e:
-        # 其他错误 (任务 6.1)
-        error_msg = f"MATLAB 执行异常: {str(e)}"
-        log_callback(f"错误: {error_msg}")
-        logger.error(error_msg, exc_info=True)
-
-        raise ProcessError(
-            "MATLAB",
-            error_msg,
-            suggestions=[
-                "查看详细日志",
-                "检查 MATLAB 环境",
-                "验证系统资源"
-            ]
-        )
-
-    finally:
-        # 确保 MATLAB 引擎关闭 (任务 7.5, 4.4)
-        if engine is not None:
-            try:
-                engine.quit()
-                log_callback("MATLAB 引擎已关闭")
-                logger.debug("MATLAB 引擎已关闭")
-            except Exception as e:
-                # 忽略退出错误 (任务 7.5)
-                logger.warning(f"MATLAB 引擎关闭时出错（忽略）: {e}")
+# 注: _execute_matlab_command 函数已移除 (ADR-005)
+# 现在使用纯 Python 实现 (a2l.address_updater.A2LAddressUpdater)
 
 
 def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
@@ -442,16 +319,17 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
     Story 2.9 - 任务 3.1-3.5:
     - 实现 execute_stage() 函数（统一接口）
     - 接受 StageConfig 和 BuildContext 参数
-    - 使用 MATLAB Engine API 执行命令
-    - 捕获 MATLAB 执行结果
+    - 使用纯 Python 实现（pyelftools）更新地址
     - 返回 StageResult（成功或失败）
 
     Architecture Decision 1.1:
     - 统一阶段签名: execute_stage(config, context) -> result
 
+    Architecture Decision ADR-005:
+    - 使用纯 Python 实现，不依赖 MATLAB Engine
+
     Story 2.9 - 任务 8:
     - 使用 context.log_callback 记录 A2L 更新开始日志
-    - 实时记录 MATLAB 命令输出
     - 记录 A2L 文件验证结果
     - 记录阶段执行时长
 
@@ -482,8 +360,8 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
     # 记录阶段开始 (任务 8.1)
     log_callback = context.log or (lambda msg: logger.info(msg))
     start_time = time.monotonic()
-    log_callback("开始 A2L 更新阶段")
-    logger.info("开始 A2L 更新阶段")
+    log_callback("开始 A2L 更新阶段（Python 实现）")
+    logger.info("开始 A2L 更新阶段（Python 实现）")
 
     try:
         # 验证配置和前置条件 (任务 12)
@@ -491,67 +369,88 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
         if validation_result:
             return validation_result
 
-        # 生成 MATLAB 命令 (任务 2, 8.2)
-        a2l_file, elf_file, matlab_command = _generate_a2l_update_command(
-            context, a2l_config
-        )
-        log_callback(f"生成 A2L 更新命令: {matlab_command}")
+        # 获取 ELF 和 A2L 文件路径
+        a2l_file, elf_file, _ = _generate_a2l_update_command(context, a2l_config)
 
-        # 执行 MATLAB 命令 (任务 3, 4, 7, 8.2)
+        if not elf_file:
+            return StageResult(
+                status=StageStatus.FAILED,
+                message="未找到 ELF 文件路径",
+                suggestions=[
+                    "检查 IAR 编译阶段是否成功",
+                    "验证 ELF 文件路径配置"
+                ]
+            )
+
+        if not a2l_file:
+            return StageResult(
+                status=StageStatus.FAILED,
+                message="未找到 A2L 文件路径",
+                suggestions=[
+                    "检查 A2L 文件路径配置",
+                    "验证 a2l_tool_path 配置"
+                ]
+            )
+
+        elf_path = Path(elf_file)
+        a2l_path = Path(a2l_file)
+
+        log_callback(f"ELF 文件: {elf_path}")
+        log_callback(f"A2L 文件: {a2l_path}")
+
+        # 使用纯 Python 实现更新地址 (ADR-005)
+        log_callback("使用 Python 解析 ELF 文件并更新 A2L 地址...")
+
+        updater = A2LAddressUpdater()
+        updater.set_log_callback(log_callback)
+
         try:
-            _execute_matlab_command(
-                matlab_command,
-                a2l_config.timeout,
-                log_callback
-            )
-        except ProcessTimeoutError as e:
-            # 超时处理 (任务 7.3, 6.2)
-            error_msg = f"A2L 更新超时（>{a2l_config.timeout}秒）"
+            result = updater.update(elf_path, a2l_path, backup=True)
+
+            if not result.success:
+                return StageResult(
+                    status=StageStatus.FAILED,
+                    message=result.message,
+                    suggestions=[
+                        "检查 ELF 文件格式",
+                        "验证 A2L 文件格式",
+                        "查看详细日志获取更多信息"
+                    ]
+                )
+
+            # 记录更新统计 (任务 8.3)
+            log_callback(f"匹配变量: {result.matched_count}/{result.total_variables}")
+            log_callback(f"未匹配变量: {result.unmatched_count}")
+
+            if result.unmatched_count > 0:
+                log_callback(f"未匹配变量列表: {', '.join(result.unmatched_variables[:10])}"
+                           + ("..." if result.unmatched_count > 10 else ""))
+
+        except (ELFParseError, A2LParseError, AddressUpdateError) as e:
+            error_msg = f"A2L 地址更新失败: {str(e)}"
             log_callback(f"错误: {error_msg}")
             logger.error(error_msg)
 
             return StageResult(
                 status=StageStatus.FAILED,
                 message=error_msg,
-                error=e,
-                suggestions=e.suggestions or [
-                    "检查 A2L 文件大小是否过大",
-                    "检查 ELF 文件是否有效",
-                    "尝试增加超时时间",
-                    "检查 MATLAB 是否卡死"
+                suggestions=[
+                    "检查 ELF 文件是否存在且有效",
+                    "检查 A2L 文件是否存在且有效",
+                    "验证 pyelftools 已安装: pip install pyelftools"
                 ]
             )
 
-        except ProcessError as e:
-            # 进程错误处理 (任务 6.1-6.6)
-            error_msg = f"A2L 更新失败: {str(e)}"
-            log_callback(f"错误: {error_msg}")
-            logger.error(error_msg)
-
-            return StageResult(
-                status=StageStatus.FAILED,
-                message=error_msg,
-                error=e,
-                suggestions=e.suggestions or [
-                    "查看详细日志",
-                    "检查 MATLAB 环境",
-                    "验证配置文件"
-                ]
-            )
-
-        # 验证 A2L 文件 (任务 5, 8.3)
-        a2l_path = Path.cwd() / a2l_file
+        # 验证更新后的 A2L 文件 (任务 5, 8.3)
         success, message = _verify_a2l_updated(a2l_path, log_callback)
 
         if not success:
-            # 验证失败 (任务 6.2, 6.6)
             return StageResult(
                 status=StageStatus.FAILED,
                 message=f"A2L 文件验证失败: {message}",
                 suggestions=[
-                    "检查 MATLAB 命令执行",
-                    "验证 ELF 文件格式",
-                    "手动检查 A2L 文件结构"
+                    "检查 ELF 文件格式",
+                    "验证 A2L 文件结构"
                 ]
             )
 
@@ -563,7 +462,7 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
         # 返回成功结果 (任务 3.5)
         return StageResult(
             status=StageStatus.COMPLETED,
-            message="A2L 文件变量地址更新成功",
+            message=f"A2L 文件变量地址更新成功（匹配 {result.matched_count} 个变量）",
             output_files=[str(a2l_path)],
             execution_time=elapsed
         )
@@ -581,7 +480,7 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
             suggestions=[
                 "查看详细日志",
                 "检查配置和环境",
-                "联系技术支持"
+                "验证 pyelftools 已安装"
             ]
         )
 
@@ -1439,113 +1338,92 @@ def _update_a2l_addresses(
     timeout: int,
     log_callback: Callable[[str], None]
 ) -> bool:
-    """使用 MATLAB 更新 A2L 文件中的变量地址
+    """使用纯 Python 更新 A2L 文件中的变量地址
+
+    ADR-005: 移除 MATLAB Engine 依赖，改用 pyelftools 纯 Python 实现
 
     Args:
         a2l_path: A2L 文件路径
         elf_path: ELF 文件路径
-        timeout: 超时时间（秒）
+        timeout: 超时时间（秒）- 保留参数以兼容调用方
         log_callback: 日志回调函数
 
     Returns:
         成功返回 True
 
     Raises:
-        ProcessError: MATLAB 执行失败
-        ProcessTimeoutError: 执行超时
+        ProcessError: 地址更新失败
     """
-    # 导入 MATLAB Engine API
-    try:
-        import matlab.engine
-    except ImportError as e:
-        error_msg = "MATLAB Engine API for Python 未安装"
-        log_callback(f"错误: {error_msg}")
-        logger.error(error_msg)
-
-        raise ProcessError(
-            "MATLAB",
-            error_msg,
-            suggestions=[
-                "安装 MATLAB R2020a 或更高版本",
-                "在 MATLAB 目录执行: cd extern/engines/python && python setup.py install",
-                "验证 import matlab.engine 可用"
-            ]
-        )
-
-    # 构建 MATLAB 命令
-    a2l_path_matlab = a2l_path.as_posix()
-    elf_path_matlab = elf_path.as_posix()
-    matlab_command = f"rtw.asap2SetAddress('{a2l_path_matlab}', '{elf_path_matlab}')"
-
-    log_callback(f"执行 MATLAB 命令更新变量地址...")
+    log_callback("使用 Python 解析 ELF 文件并更新 A2L 地址...")
     log_callback(f"  A2L: {a2l_path.name}")
     log_callback(f"  ELF: {elf_path.name}")
 
     start_time = time.monotonic()
-    engine = None
 
     try:
-        # 启动 MATLAB 引擎
-        log_callback("正在启动 MATLAB 引擎...")
-        engine = matlab.engine.start_matlab()
+        # 使用纯 Python 实现
+        updater = A2LAddressUpdater()
+        updater.set_log_callback(log_callback)
+
+        result = updater.update(elf_path, a2l_path, backup=True)
 
         elapsed = time.monotonic() - start_time
-        log_callback(f"MATLAB 引擎已启动（耗时 {elapsed:.2f} 秒）")
 
-        # 设置工作目录为 A2L 文件所在目录
-        engine.cd(str(a2l_path.parent))
-        log_callback(f"MATLAB 工作目录: {a2l_path.parent}")
+        if result.success:
+            log_callback(f"地址更新成功（耗时 {elapsed:.2f} 秒）")
+            log_callback(f"  匹配变量: {result.matched_count}/{result.total_variables}")
+            if result.unmatched_count > 0:
+                log_callback(f"  未匹配变量: {result.unmatched_count}")
+                # 只显示前10个未匹配变量
+                unmatched_preview = result.unmatched_variables[:10]
+                log_callback(f"  未匹配列表: {', '.join(unmatched_preview)}"
+                           + ("..." if result.unmatched_count > 10 else ""))
+            return True
+        else:
+            error_msg = result.message
+            log_callback(f"错误: {error_msg}")
+            logger.error(error_msg)
 
-        # 执行命令
-        command_start = time.monotonic()
-        log_callback(f"执行: {matlab_command}")
+            raise ProcessError(
+                "A2L",
+                error_msg,
+                suggestions=[
+                    "检查 ELF 文件格式是否正确",
+                    "验证 A2L 文件格式是否正确",
+                    "确认 pyelftools 已安装: pip install pyelftools"
+                ]
+            )
 
-        engine.eval(matlab_command, nargout=0)
-
-        command_elapsed = time.monotonic() - command_start
-        log_callback(f"MATLAB 命令执行成功（耗时 {command_elapsed:.2f} 秒）")
-
-        return True
-
-    except matlab.engine.MatlabExecutionError as e:
-        error_msg = f"MATLAB 命令执行失败: {str(e)}"
+    except (ELFParseError, A2LParseError, AddressUpdateError) as e:
+        error_msg = f"地址更新失败: {str(e)}"
         log_callback(f"错误: {error_msg}")
         logger.error(error_msg, exc_info=True)
 
         raise ProcessError(
-            "MATLAB",
+            "A2L",
             error_msg,
             suggestions=[
-                "检查 MATLAB 安装和版本",
-                "验证 rtw.asap2SetAddress 函数可用",
-                "查看 MATLAB 详细错误日志",
-                "验证 A2L 文件格式"
+                "检查 ELF 文件是否存在且有效",
+                "检查 A2L 文件是否存在且有效",
+                "确认 pyelftools 已安装: pip install pyelftools"
             ]
         )
 
     except Exception as e:
-        error_msg = f"MATLAB 执行异常: {str(e)}"
+        error_msg = f"地址更新异常: {str(e)}"
         log_callback(f"错误: {error_msg}")
         logger.error(error_msg, exc_info=True)
 
         raise ProcessError(
-            "MATLAB",
+            "A2L",
             error_msg,
             suggestions=[
                 "查看详细日志",
-                "检查 MATLAB 环境",
+                "检查文件路径配置",
                 "验证系统资源"
             ]
         )
 
-    finally:
-        # 确保 MATLAB 引擎关闭
-        if engine is not None:
-            try:
-                engine.quit()
-                log_callback("MATLAB 引擎已关闭")
-            except Exception as e:
-                logger.warning(f"MATLAB 引擎关闭时出错（忽略）: {e}")
 
 
 def execute_xcp_header_replacement_stage(
