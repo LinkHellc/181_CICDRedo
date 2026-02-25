@@ -58,6 +58,7 @@ class NewProjectDialog(QDialog):
         "a2l_path": "📝",
         "target_path": "🎯",
         "iar_project_path": "🔧",
+        "iar_tool_path": "⚙️",
         "a2l_tool_path": "🛠️",
     }
 
@@ -272,11 +273,12 @@ class NewProjectDialog(QDialog):
         # 路径字段
         path_fields = [
             ("simulink_path", "Simulink 工程路径"),
-            ("matlab_code_path", "MATLAB 代码路径"),
             ("a2l_path", "A2L 文件路径"),
-            ("target_path", "目标文件路径"),
+            ("iar_tool_path", "IAR 工具 (IarBuild.exe)"),
             ("iar_project_path", "IAR 工程路径"),
+            ("matlab_code_path", "IAR-MATLAB 代码路径"),
             ("a2l_tool_path", "A2L 工具路径"),
+            ("target_path", "目标文件夹"),
         ]
 
         self.path_inputs: dict[str, QLineEdit] = {}
@@ -395,7 +397,7 @@ class NewProjectDialog(QDialog):
         input_row.addWidget(browse_btn)
 
         # 自动检测按钮（仅针对 MATLAB 和 IAR）
-        if field_key in ("matlab_code_path", "iar_project_path"):
+        if field_key in ("matlab_code_path", "iar_project_path", "iar_tool_path"):
             detect_key = "matlab" if field_key == "matlab_code_path" else "iar"
             detect_btn = QPushButton("🔍")
             detect_btn.setObjectName("detect")
@@ -518,6 +520,7 @@ class NewProjectDialog(QDialog):
         self.path_inputs["a2l_path"].setText(config.a2l_path)
         self.path_inputs["target_path"].setText(config.target_path)
         self.path_inputs["iar_project_path"].setText(config.iar_project_path)
+        self.path_inputs["iar_tool_path"].setText(getattr(config, 'iar_tool_path', ''))
         self.path_inputs["a2l_tool_path"].setText(getattr(config, 'a2l_tool_path', ''))
 
     def _validate_paths(self) -> list[str]:
@@ -527,11 +530,12 @@ class NewProjectDialog(QDialog):
         # 只验证路径字段，项目名称单独处理
         path_fields = [
             ("simulink_path", "Simulink 工程路径"),
-            ("matlab_code_path", "MATLAB 代码路径"),
             ("a2l_path", "A2L 文件路径"),
-            ("target_path", "目标文件路径"),
+            ("iar_tool_path", "IAR 工具 (IarBuild.exe)"),
             ("iar_project_path", "IAR 工程路径"),
+            ("matlab_code_path", "IAR-MATLAB 代码路径"),
             ("a2l_tool_path", "A2L 工具路径"),
+            ("target_path", "目标文件夹"),
         ]
 
         for field_key, field_name in path_fields:
@@ -584,6 +588,7 @@ class NewProjectDialog(QDialog):
             a2l_path=self.path_inputs["a2l_path"].text(),
             target_path=self.path_inputs["target_path"].text(),
             iar_project_path=self.path_inputs["iar_project_path"].text(),
+            iar_tool_path=self.path_inputs["iar_tool_path"].text(),
             a2l_tool_path=self.path_inputs["a2l_tool_path"].text(),
         )
 
@@ -667,8 +672,9 @@ class NewProjectDialog(QDialog):
             detected_count += 1
 
         if results["iar"]:
-            self.path_inputs["iar_project_path"].setText(str(results["iar"]))
-            self._mark_field_validated(self.path_inputs["iar_project_path"], True)
+            # IAR 工具路径（IarBuild.exe 所在目录）
+            self.path_inputs["iar_tool_path"].setText(str(results["iar"]))
+            self._mark_field_validated(self.path_inputs["iar_tool_path"], True)
             detected_count += 1
 
         if detected_count > 0:

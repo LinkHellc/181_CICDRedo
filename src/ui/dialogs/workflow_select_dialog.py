@@ -1,6 +1,6 @@
 """Workflow Selection Dialog for MBD_CICDKits.
 
-This module implements the workflow template selection dialog
+This module implements the workflow/stage selection dialog
 following Architecture Decision 3.1 (PyQt6 UI Patterns).
 
 Story 2.1: Select predefined workflow template
@@ -21,48 +21,81 @@ from PyQt6.QtWidgets import (
     QWidget,
     QFileDialog,
     QMessageBox,
+    QCheckBox,
+    QGroupBox,
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QFont
 
-from core.models import WorkflowConfig
+from core.models import WorkflowConfig, StageConfig
 from core.config import load_workflow_templates, load_custom_workflow
 from ui.styles.industrial_theme import FontManager
 
 logger = logging.getLogger(__name__)
 
 
+# 阶段定义
+STAGE_DEFINITIONS = {
+    "matlab_gen": {
+        "name": "MATLAB 代码生成",
+        "icon": "🔬",
+        "description": "调用 MATLAB 生成 Simulink 模型代码",
+        "dependencies": []
+    },
+    "file_process": {
+        "name": "文件处理",
+        "icon": "⚙️",
+        "description": "处理 Cal.c 文件，添加内存区域定义",
+        "dependencies": ["matlab_gen"]
+    },
+    "file_move": {
+        "name": "文件复制",
+        "icon": "📦",
+        "description": "复制代码文件到 IAR 工程目录",
+        "dependencies": ["file_process"]
+    },
+    "iar_compile": {
+        "name": "IAR 编译",
+        "icon": "🔧",
+        "description": "执行 IAR 编译生成 ELF/HEX 文件",
+        "dependencies": ["file_move"]
+    },
+    "a2l_process": {
+        "name": "A2L 文件处理",
+        "icon": "📝",
+        "description": "更新 A2L 变量地址并替换 XCP 头文件",
+        "dependencies": ["iar_compile"]
+    },
+    "package": {
+        "name": "打包归档",
+        "icon": "🎯",
+        "description": "归档 HEX 和 A2L 文件到目标文件夹",
+        "dependencies": ["a2l_process"]
+    }
+}
+
+
 class WorkflowSelectDialog(QDialog):
-    """工作流选择对话框
+    """阶段选择对话框
 
-    遵循 PyQt6 类模式，使用信号槽通信。
-
-    功能：
-    - 显示预定义工作流模板列表
-    - 显示模板详情（描述、预计时间）
-    - 支持模板选择交互
-    - 选择后返回 WorkflowConfig 对象
-
-    Architecture Decision 3.1:
-    - 继承 QDialog
-    - 使用 pyqtSignal 进行事件通信
-    - 跨线程信号使用 Qt.ConnectionType.QueuedConnection
+    允许用户选择要执行的阶段，自动处理依赖关系。
     """
 
     # 定义信号：工作流选择确认时发射
-    workflow_selected = pyqtSignal(WorkflowConfig)  # 参数：选中的工作流配置
+    workflow_selected = pyqtSignal(WorkflowConfig)
 
-    def __init__(self, parent=None):
+    def __init__(self, current_workflow: WorkflowConfig = None, parent=None):
         """初始化对话框
 
         Args:
+            current_workflow: 当前的工作流配置
             parent: 父窗口
         """
         super().__init__(parent)
 
-        self.setWindowTitle("⚙️ 选择工作流模板")
-        self.setMinimumWidth(700)
-        self.setMinimumHeight(550)
+        self.setWindowTitle("📋 选择执行阶段")
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(500)
 
         # 应用主题样式
         self.setStyleSheet("""
@@ -71,257 +104,172 @@ class WorkflowSelectDialog(QDialog):
             }
         """)
 
-        # 加载工作流模板
-        self._templates: list[WorkflowConfig] = []
-        self._selected_workflow: WorkflowConfig | None = None
+        self._current_workflow = current_workflow
+        self._stage_checkboxes: dict[str, QCheckBox] = {}
 
         # 初始化 UI
         self._init_ui()
-        self._load_templates()
+
+        # 加载当前配置
+        if current_workflow:
+            self._load_current_config()
 
     def _init_ui(self):
         """初始化 UI 组件"""
-        # 主布局
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(32, 32, 32, 32)
+        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(24, 24, 24, 24)
 
         # ===== 标题区域 =====
-        title_card = QFrame()
-        title_layout = QVBoxLayout(title_card)
-        title_layout.setContentsMargins(24, 20, 24, 20)
+        title_label = QLabel("📋 选择执行阶段")
+        title_label.setStyleSheet("font-size: 20px; font-weight: 700; color: #f1f5f9;")
+        main_layout.addWidget(title_label)
 
-        title = QLabel("⚙️ 工作流模板")
-        title.setStyleSheet("font-size: 24px; font-weight: 700; color: #f1f5f9;")
-        title_layout.addWidget(title)
+        desc_label = QLabel("勾选要执行的阶段，依赖的阶段将自动启用")
+        desc_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        main_layout.addWidget(desc_label)
 
-        desc = QLabel("选择一个预定义的工作流模板来开始构建任务")
-        desc.setStyleSheet("color: #94a3b8; font-size: 13px;")
-        title_layout.addWidget(desc)
-
-        main_layout.addWidget(title_card)
-
-        # ===== 工作流列表区域 =====
-        list_container = QFrame()
-        list_layout = QVBoxLayout(list_container)
-        list_layout.setContentsMargins(0, 0, 0, 0)
-        list_layout.setSpacing(12)
-
-        # 工作流列表
-        self.workflow_list = QListWidget()
-        self.workflow_list.setMinimumHeight(300)
-        self.workflow_list.setStyleSheet("""
-            QListWidget {
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
+        # ===== 阶段列表区域 =====
+        stages_frame = QFrame()
+        stages_frame.setStyleSheet("""
+            QFrame {
+                background-color: #1e293b;
+                border: 1px solid #334155;
                 border-radius: 8px;
-                padding: 8px;
-            }
-            QListWidget::item {
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 6px;
-                padding: 12px;
-                margin: 4px;
-                color: #f1f5f9;
-            }
-            QListWidget::item:selected {
-                background-color: #f59e0b;
-                color: #16213e;
-            }
-            QListWidget::item:hover {
-                background-color: rgba(245, 158, 11, 0.2);
             }
         """)
-        self.workflow_list.itemClicked.connect(self._on_workflow_selected)
-        list_layout.addWidget(self.workflow_list)
+        stages_layout = QVBoxLayout(stages_frame)
+        stages_layout.setSpacing(8)
+        stages_layout.setContentsMargins(16, 16, 16, 16)
 
-        # 详情显示区域
-        self.details_label = QLabel("选择一个模板查看详情")
-        self.details_label.setStyleSheet("""
-            QLabel {
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                padding: 16px;
-                color: #94a3b8;
-                font-size: 13px;
-            }
-        """)
-        self.details_label.setWordWrap(True)
-        self.details_label.setMinimumHeight(100)
-        list_layout.addWidget(self.details_label)
+        # 创建阶段复选框
+        for stage_id, stage_info in STAGE_DEFINITIONS.items():
+            checkbox = QCheckBox(f"{stage_info['icon']} {stage_info['name']}")
+            checkbox.setStyleSheet("""
+                QCheckBox {
+                    color: #f1f5f9;
+                    font-size: 14px;
+                    font-weight: 500;
+                    spacing: 8px;
+                    padding: 8px 0;
+                }
+                QCheckBox::indicator {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 4px;
+                    border: 2px solid #475569;
+                    background-color: #1e293b;
+                }
+                QCheckBox::indicator:checked {
+                    background-color: #f97316;
+                    border-color: #f97316;
+                }
+                QCheckBox::indicator:hover {
+                    border-color: #f97316;
+                }
+            """)
+            checkbox.setToolTip(stage_info['description'])
+            checkbox.stateChanged.connect(lambda state, sid=stage_id: self._on_stage_changed(sid, state))
 
-        main_layout.addWidget(list_container, 1)
+            self._stage_checkboxes[stage_id] = checkbox
+            stages_layout.addWidget(checkbox)
+
+            # 添加描述标签
+            desc = QLabel(f"    {stage_info['description']}")
+            desc.setStyleSheet("color: #64748b; font-size: 12px; margin-left: 28px;")
+            stages_layout.addWidget(desc)
+
+        main_layout.addWidget(stages_frame)
+
+        # ===== 快捷操作按钮 =====
+        quick_actions = QHBoxLayout()
+        quick_actions.setSpacing(8)
+
+        select_all_btn = QPushButton("全选")
+        select_all_btn.setProperty("secondary", True)
+        select_all_btn.clicked.connect(self._select_all)
+        quick_actions.addWidget(select_all_btn)
+
+        deselect_all_btn = QPushButton("全不选")
+        deselect_all_btn.setProperty("secondary", True)
+        deselect_all_btn.clicked.connect(self._deselect_all)
+        quick_actions.addWidget(deselect_all_btn)
+
+        quick_actions.addStretch()
+
+        main_layout.addLayout(quick_actions)
 
         # ===== 按钮区域 =====
-        button_card = QFrame()
-        button_layout = QHBoxLayout(button_card)
-        button_layout.setContentsMargins(0, 16, 0, 0)
+        button_layout = QHBoxLayout()
         button_layout.setSpacing(12)
-
         button_layout.addStretch()
-
-        # Story 2.2: 添加加载自定义工作流按钮
-        custom_btn = QPushButton("📁 加载自定义工作流")
-        custom_btn.setMinimumHeight(44)
-        custom_btn.setMinimumWidth(160)
-        custom_btn.clicked.connect(self._load_custom_workflow)
-        button_layout.addWidget(custom_btn)
 
         cancel_btn = QPushButton("取消")
         cancel_btn.setMinimumHeight(44)
-        cancel_btn.setMinimumWidth(120)
+        cancel_btn.setMinimumWidth(100)
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
 
-        self.confirm_btn = QPushButton("✓ 确认选择")
-        self.confirm_btn.setProperty("primary", True)
-        self.confirm_btn.setMinimumHeight(44)
-        self.confirm_btn.setMinimumWidth(140)
-        self.confirm_btn.setEnabled(False)  # 初始禁用，直到选择模板
-        self.confirm_btn.clicked.connect(self._confirm_selection)
-        button_layout.addWidget(self.confirm_btn)
+        confirm_btn = QPushButton("✓ 确认")
+        confirm_btn.setProperty("primary", True)
+        confirm_btn.setMinimumHeight(44)
+        confirm_btn.setMinimumWidth(120)
+        confirm_btn.clicked.connect(self._confirm_selection)
+        button_layout.addWidget(confirm_btn)
 
-        main_layout.addWidget(button_card)
+        main_layout.addLayout(button_layout)
 
-    def _load_templates(self):
-        """加载工作流模板"""
-        try:
-            self._templates = load_workflow_templates()
-            logger.info(f"已加载 {len(self._templates)} 个工作流模板")
+    def _load_current_config(self):
+        """加载当前配置到复选框"""
+        if not self._current_workflow:
+            return
 
-            # 填充列表
-            for template in self._templates:
-                item = QListWidgetItem()
-                # 创建显示文本
-                display_text = f"{template.name}\n"
-                display_text += f"⏱️ 预计时间: {template.estimated_time} 分钟"
-                item.setText(display_text)
-                item.setData(Qt.ItemDataRole.UserRole, template)
-                self.workflow_list.addItem(item)
+        for stage in self._current_workflow.stages:
+            if stage.name in self._stage_checkboxes:
+                self._stage_checkboxes[stage.name].setChecked(stage.enabled)
 
-        except Exception as e:
-            logger.error(f"加载工作流模板失败: {e}")
-            self.details_label.setText(f"⚠️ 加载工作流模板失败: {str(e)}")
+    def _on_stage_changed(self, stage_id: str, state: int):
+        """处理阶段选择变化"""
+        if state == Qt.CheckState.Checked.value:
+            # 自动启用依赖的阶段
+            dependencies = STAGE_DEFINITIONS.get(stage_id, {}).get('dependencies', [])
+            for dep in dependencies:
+                if dep in self._stage_checkboxes:
+                    self._stage_checkboxes[dep].setChecked(True)
 
-    def _on_workflow_selected(self, item: QListWidgetItem):
-        """处理工作流选择事件
+    def _select_all(self):
+        """全选所有阶段"""
+        for checkbox in self._stage_checkboxes.values():
+            checkbox.setChecked(True)
 
-        Args:
-            item: 被选中的列表项
-        """
-        template: WorkflowConfig = item.data(Qt.ItemDataRole.UserRole)
-        self._selected_workflow = template
-
-        # 更新详情显示
-        details_text = f"📋 {template.name}\n\n"
-        details_text += f"描述: {template.description}\n\n"
-        details_text += f"⏱️ 预计时间: {template.estimated_time} 分钟\n\n"
-        details_text += "包含阶段:\n"
-
-        for i, stage in enumerate(template.stages, 1):
-            status = "✓" if stage.enabled else "○"
-            details_text += f"  {status} {stage.name}"
-            if stage.enabled:
-                details_text += f" ({stage.timeout}秒)"
-            details_text += "\n"
-
-        self.details_label.setText(details_text)
-        self.confirm_btn.setEnabled(True)
-
-        logger.info(f"选择工作流: {template.id}")
+    def _deselect_all(self):
+        """取消选择所有阶段"""
+        for checkbox in self._stage_checkboxes.values():
+            checkbox.setChecked(False)
 
     def _confirm_selection(self):
-        """确认选择并关闭对话框"""
-        if self._selected_workflow:
-            self.workflow_selected.emit(self._selected_workflow)
-            self.accept()
-        else:
-            logger.warning("未选择工作流模板")
+        """确认选择"""
+        self.accept()
 
-    def _load_custom_workflow(self):
-        """加载自定义工作流配置 (Story 2.2)
-
-        打开文件选择对话框，让用户选择自定义工作流JSON文件。
-        """
-        try:
-            # 打开文件选择对话框
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "选择自定义工作流配置文件",
-                str(Path.home()),
-                "JSON 文件 (*.json);;所有文件 (*.*)"
-            )
-
-            if not file_path:
-                logger.info("用户取消了自定义工作流加载")
-                return
-
-            # 加载并验证自定义工作流
-            logger.info(f"正在加载自定义工作流: {file_path}")
-            workflow, error_msg = load_custom_workflow(Path(file_path))
-
-            if error_msg:
-                # 显示错误消息
-                QMessageBox.critical(
-                    self,
-                    "加载失败",
-                    f"无法加载自定义工作流配置：\n\n{error_msg}",
-                    QMessageBox.StandardButton.Ok
-                )
-                logger.error(f"加载自定义工作流失败: {error_msg}")
-                return
-
-            # 加载成功，将自定义工作流添加到列表中
-            self._add_custom_workflow_to_list(workflow, Path(file_path).name)
-            logger.info(f"成功加载自定义工作流: {workflow.name}")
-
-        except Exception as e:
-            logger.exception(f"加载自定义工作流时发生异常: {e}")
-            QMessageBox.critical(
-                self,
-                "错误",
-                f"加载自定义工作流时发生未知错误：\n\n{str(e)}",
-                QMessageBox.StandardButton.Ok
-            )
-
-    def _add_custom_workflow_to_list(self, workflow: WorkflowConfig, filename: str):
-        """将自定义工作流添加到列表中 (Story 2.2)
-
-        Args:
-            workflow: 加载的工作流配置对象
-            filename: 源文件名
-        """
-        # 检查是否已存在同名工作流
-        for i in range(self.workflow_list.count()):
-            item = self.workflow_list.item(i)
-            existing_workflow: WorkflowConfig = item.data(Qt.ItemDataRole.UserRole)
-            if existing_workflow.id == workflow.id:
-                # 替换现有的工作流
-                self.workflow_list.takeItem(i)
-                logger.info(f"替换已存在的工作流: {workflow.id}")
-                break
-
-        # 创建新的列表项
-        item = QListWidgetItem()
-        display_text = f"{workflow.name} (自定义)"
-        display_text += f"\n⏱️ 预计时间: {workflow.estimated_time} 分钟" if workflow.estimated_time > 0 else ""
-        display_text += f"\n📁 {filename}"
-        item.setText(display_text)
-        item.setData(Qt.ItemDataRole.UserRole, workflow)
-
-        # 添加到列表顶部
-        self.workflow_list.insertItem(0, item)
-
-        # 自动选中
-        self.workflow_list.setCurrentItem(item)
-        self._on_workflow_selected(item)
-
-    def get_selected_workflow(self) -> WorkflowConfig | None:
+    def get_selected_workflow(self) -> WorkflowConfig:
         """获取选中的工作流配置
 
         Returns:
-            选中的 WorkflowConfig 对象，如果未选择则返回 None
+            WorkflowConfig: 包含用户选择的阶段配置
         """
-        return self._selected_workflow
+        stages = []
+        for stage_id, checkbox in self._stage_checkboxes.items():
+            stage_config = StageConfig(
+                name=stage_id,
+                enabled=checkbox.isChecked(),
+                timeout=300  # 默认超时
+            )
+            stages.append(stage_config)
+
+        return WorkflowConfig(
+            id="custom_selection",
+            name="自定义选择",
+            description="用户手动选择的阶段组合",
+            stages=stages,
+            estimated_time=0
+        )

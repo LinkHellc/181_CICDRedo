@@ -112,7 +112,7 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
         # 获取或推导 A2L 文件源路径
         a2l_source_path_str = context.config.get("a2l_source_path", "")
         if not a2l_source_path_str:
-            # 优先从 context.state 获取 A2L 输出路径
+            # 优先从 context.state 获取 A2L 输出路径（A2L 处理阶段的输出）
             a2l_source_path_str = context.state.get("a2l_output_path", "")
             if not a2l_source_path_str:
                 # 从 a2l_tool_path 推导 A2L 源路径

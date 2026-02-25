@@ -134,10 +134,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._create_status_card())
 
         # ===== 构建进度卡片 (Story 2.14 - 任务 5, 8) =====
-        layout.addWidget(self._create_progress_card())
+        layout.addWidget(self._create_progress_card(), 1)  # 添加伸展因子
 
         # ===== 日志查看器卡片 =====
-        layout.addWidget(self._create_log_viewer_card())
+        layout.addWidget(self._create_log_viewer_card(), 2)  # 更大的伸展因子
 
         layout.addStretch()
 
@@ -239,6 +239,13 @@ class MainWindow(QMainWindow):
         self.validate_btn.clicked.connect(self._validate_config)
         layout.addWidget(self.validate_btn)
 
+        # 选择阶段按钮
+        self.select_stages_btn = QPushButton("📋 选择阶段")
+        self.select_stages_btn.setMinimumHeight(48)
+        self.select_stages_btn.setEnabled(False)
+        self.select_stages_btn.clicked.connect(self._select_stages)
+        layout.addWidget(self.select_stages_btn)
+
         # 构建按钮（大号主要按钮）
         self.build_btn = QPushButton("🚀 开始构建")
         self.build_btn.setProperty("primary", True)
@@ -281,19 +288,23 @@ class MainWindow(QMainWindow):
         # 图标映射
         icons = {
             "simulink_path": "📊",
-            "matlab_code_path": "🔬",
             "a2l_path": "📝",
-            "target_path": "🎯",
+            "iar_tool_path": "⚙️",
             "iar_project_path": "🔧",
+            "matlab_code_path": "🔬",
+            "a2l_tool_path": "🛠️",
+            "target_path": "🎯",
         }
 
         self.path_labels = {}
         path_fields = [
             ("simulink_path", "Simulink 工程"),
-            ("matlab_code_path", "MATLAB 代码"),
             ("a2l_path", "A2L 文件"),
-            ("target_path", "目标文件"),
+            ("iar_tool_path", "IAR 工具 (IarBuild.exe)"),
             ("iar_project_path", "IAR 工程"),
+            ("matlab_code_path", "IAR-MATLAB 代码"),
+            ("a2l_tool_path", "A2L 工具"),
+            ("target_path", "目标文件夹"),
         ]
 
         for i, (field_key, label_text) in enumerate(path_fields):
@@ -413,7 +424,7 @@ class MainWindow(QMainWindow):
 
         # 进度面板 (Story 2.14 - 任务 5)
         self.progress_panel = ProgressPanel()
-        self.progress_panel.setMinimumHeight(250)
+        self.progress_panel.setMinimumHeight(320)
         layout.addWidget(self.progress_panel)
 
         return card
@@ -562,9 +573,11 @@ class MainWindow(QMainWindow):
         self.path_labels["a2l_path"].setText(config.a2l_path)
         self.path_labels["target_path"].setText(config.target_path)
         self.path_labels["iar_project_path"].setText(config.iar_project_path)
+        self.path_labels["iar_tool_path"].setText(config.iar_tool_path)
 
-        # 启用"验证配置"和"开始构建"按钮
+        # 启用"验证配置"、"选择阶段"和"开始构建"按钮
         self.validate_btn.setEnabled(True)
+        self.select_stages_btn.setEnabled(True)
         self.build_btn.setEnabled(True)
 
         # 保存当前配置
@@ -588,6 +601,7 @@ class MainWindow(QMainWindow):
             input_field.clear()
 
         self.validate_btn.setEnabled(False)
+        self.select_stages_btn.setEnabled(False)
         self.build_btn.setEnabled(False)
         self._current_config = None
         self.last_build_label.setText("—")
@@ -654,6 +668,40 @@ class MainWindow(QMainWindow):
             # 重新加载配置到 UI
             self._load_project_to_ui(project_name)
             logger.info(f"项目配置已编辑: {project_name}")
+
+    def _select_stages(self):
+        """选择要执行的阶段"""
+        if not self._current_config:
+            QMessageBox.warning(self, "⚠️ 未加载项目", "请先加载一个项目配置。")
+            return
+
+        from ui.dialogs.workflow_select_dialog import WorkflowSelectDialog
+        from core.models import StageConfig
+
+        # 获取当前保存的工作流配置或使用默认配置
+        if "workflow_config" in self._current_config.custom_params:
+            workflow_data = self._current_config.custom_params["workflow_config"]
+            workflow_config = WorkflowConfig.from_dict(workflow_data)
+            if not workflow_config.stages:
+                workflow_config = self._get_default_workflow()
+        else:
+            workflow_config = self._get_default_workflow()
+
+        # 打开阶段选择对话框
+        dialog = WorkflowSelectDialog(workflow_config, self)
+        if dialog.exec() == 1:  # QDialog.Accepted
+            # 获取用户选择的配置
+            selected_config = dialog.get_selected_workflow()
+            # 保存到项目配置
+            self._current_config.custom_params["workflow_config"] = selected_config.to_dict()
+            # 保存配置到文件
+            from core.config import update_config
+            update_config(self._current_config.name, self._current_config)
+            logger.info(f"已更新阶段选择配置")
+
+            # 显示选中的阶段
+            enabled_stages = [s.name for s in selected_config.stages if s.enabled]
+            self.status_bar.showMessage(f"已选择阶段: {', '.join(enabled_stages)}")
 
     def _validate_config(self):
         """验证工作流配置（Story 2.3 Task 7）"""
@@ -808,7 +856,7 @@ class MainWindow(QMainWindow):
         self.project_combo.setEnabled(False)
 
         # 禁用所有操作按钮
-        for btn in [self.validate_btn, self.build_btn]:
+        for btn in [self.validate_btn, self.select_stages_btn, self.build_btn]:
             btn.setEnabled(False)
 
         # 显示取消按钮 (Story 2.4 Task 6.1)
@@ -826,6 +874,7 @@ class MainWindow(QMainWindow):
 
         # 恢复按钮状态
         self.validate_btn.setEnabled(bool(self._current_config))
+        self.select_stages_btn.setEnabled(bool(self._current_config))
         self.build_btn.setEnabled(bool(self._current_config))
 
         # 隐藏取消按钮
@@ -918,34 +967,43 @@ class MainWindow(QMainWindow):
 
     def _on_build_finished(self, state: BuildState):
         """构建完成回调 (Story 2.4 Task 10.1)"""
-        self._is_building = False
+        try:
+            self._is_building = False
 
-        # 清理工作流管理器 (Story 2.4 Task 10.5)
-        self._workflow_manager.cleanup()
+            # 清理工作流管理器 (Story 2.4 Task 10.5)
+            self._workflow_manager.cleanup()
 
-        # 解锁UI (Story 2.4 Task 10.2)
-        self._unlock_config_ui()
+            # 解锁UI (Story 2.4 Task 10.2)
+            self._unlock_config_ui()
 
-        # 根据最终状态显示结果 (Story 2.4 Task 10.4)
-        if state == BuildState.COMPLETED:
-            QMessageBox.information(
-                self,
-                "✅ 构建成功",
-                f"项目 {self._current_config.name} 构建成功！"
-            )
-            self.status_bar.showMessage("✅ 构建完成")
-            self.last_build_label.setText("成功")
-        elif state == BuildState.CANCELLED:
-            self.status_bar.showMessage("⏸️ 构建已取消")
-            QMessageBox.information(self, "⏸️ 已取消", "构建已被用户取消。")
-            self.last_build_label.setText("已取消")
-        elif state == BuildState.FAILED:
-            self.status_bar.showMessage("❌ 构建失败")
-            self.last_build_label.setText("失败")
-            # 错误详情已在 error_occurred 中处理
+            # 根据最终状态显示结果 (Story 2.4 Task 10.4)
+            if state == BuildState.COMPLETED:
+                QMessageBox.information(
+                    self,
+                    "✅ 构建成功",
+                    f"项目 {self._current_config.name} 构建成功！"
+                )
+                self.status_bar.showMessage("✅ 构建完成")
+                self.last_build_label.setText("成功")
+            elif state == BuildState.CANCELLED:
+                self.status_bar.showMessage("⏸️ 构建已取消")
+                QMessageBox.information(self, "⏸️ 已取消", "构建已被用户取消。")
+                self.last_build_label.setText("已取消")
+            elif state == BuildState.FAILED:
+                self.status_bar.showMessage("❌ 构建失败")
+                self.last_build_label.setText("失败")
+                # 错误详情已在 error_occurred 中处理
 
-        # 记录最终状态到日志 (Story 2.4 Task 10.5)
-        logger.info(f"构建完成，状态: {state.value}")
+            # 记录最终状态到日志 (Story 2.4 Task 10.5)
+            logger.info(f"构建完成，状态: {state.value}")
+        except Exception as e:
+            logger.exception(f"处理构建完成回调时发生异常: {e}")
+            # 确保UI状态正确
+            self._is_building = False
+            try:
+                self._unlock_config_ui()
+            except Exception:
+                pass
 
     def _on_progress_update(self, percent: int, message: str):
         """进度更新回调 (Story 2.4 Task 5.3)"""
@@ -994,14 +1052,18 @@ class MainWindow(QMainWindow):
 
     def _on_error_occurred(self, error: str, suggestions: list):
         """错误发生回调 (Story 2.4 Task 5)"""
-        logger.error(f"构建错误: {error}")
+        try:
+            logger.error(f"构建错误: {error}")
 
-        # 构建错误消息
-        msg = error
-        if suggestions:
-            msg += "\n\n建议操作:\n" + "\n".join(f"  • {s}" for s in suggestions)
+            # 构建错误消息
+            msg = error
+            if suggestions:
+                msg += "\n\n建议操作:\n" + "\n".join(f"  • {s}" for s in suggestions)
 
-        QMessageBox.critical(self, "❌ 构建失败", msg)
+            QMessageBox.critical(self, "❌ 构建失败", msg)
+        except Exception as e:
+            logger.exception(f"显示错误对话框时发生异常: {e}")
+            # 即使对话框显示失败，也不要退出应用
 
     def _show_about(self):
         """显示关于对话框"""

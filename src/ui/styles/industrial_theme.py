@@ -13,10 +13,30 @@ Modern Theme - MBD_CICDKits
 更新日期: 2026-02-07
 """
 
+import sys
 from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette, QColor, QFont, QFontDatabase
 from typing import Optional
+
+
+def get_resource_path(relative_path: str) -> Path:
+    """获取资源文件路径，支持PyInstaller打包
+
+    Args:
+        relative_path: 相对于src/ui目录的路径
+
+    Returns:
+        资源文件的绝对路径
+    """
+    if getattr(sys, 'frozen', False):
+        # PyInstaller打包后的路径
+        base_path = Path(sys._MEIPASS) / "src" / "ui"
+    else:
+        # 开发环境路径
+        base_path = Path(__file__).parent
+
+    return base_path / relative_path
 
 
 # =============================================================================
@@ -48,8 +68,8 @@ class FontManager:
         if cls._embedded_fonts_loaded:
             return
 
-        # 字体目录
-        font_dir = Path(__file__).parent.parent / "resources" / "fonts"
+        # 字体目录 - 支持PyInstaller打包
+        font_dir = get_resource_path("resources/fonts")
 
         # 要加载的字体文件
         font_files = [

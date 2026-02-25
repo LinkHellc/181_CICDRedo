@@ -220,10 +220,27 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
         timeout = config.timeout or get_stage_timeout("iar_compile")
         context.log(f"超时设置: {timeout} 秒")
 
+        # 获取 IAR 工具路径（支持文件或目录）
+        iar_tool_path = context.config.get("iar_tool_path", "")
+        iar_build_path = None
+        if iar_tool_path:
+            iar_path = Path(iar_tool_path)
+            if iar_path.is_file():
+                # 直接指向 IarBuild.exe 文件
+                iar_build_path = str(iar_path)
+                context.log(f"IAR 工具: {iar_build_path}")
+            elif iar_path.is_dir():
+                # 指向目录，拼接 IarBuild.exe
+                iar_build_path = str(iar_path / "IarBuild.exe")
+                context.log(f"IAR 工具目录: {iar_tool_path}")
+            else:
+                context.log(f"警告: IAR 工具路径不存在: {iar_tool_path}")
+
         # 初始化 IAR 集成
         iar = IarIntegration(
             log_callback=context.log,
-            timeout=timeout
+            timeout=timeout,
+            iar_build_path=iar_build_path
         )
 
         # 检查 iarbuild.exe 是否可用 (Story 2.8 - 任务 6.2)
@@ -236,14 +253,14 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
                     "IAR 编译器未找到: IarBuild.exe",
                     suggestions=[
                         "检查 IAR Embedded Workbench 是否正确安装",
-                        "验证 IAR 安装目录是否在 PATH 环境变量中",
-                        "手动指定 IarBuild.exe 的完整路径"
+                        "在项目配置中设置 IAR 工具路径（IarBuild.exe 文件路径或其所在目录）",
+                        "验证 IAR 安装目录是否在 PATH 环境变量中"
                     ]
                 ),
                 suggestions=[
                     "检查 IAR Embedded Workbench 是否正确安装",
-                    "验证 IAR 安装目录是否在 PATH 环境变量中",
-                    "手动指定 IarBuild.exe 的完整路径"
+                    "在项目配置中设置 IAR 工具路径（IarBuild.exe 文件路径或其所在目录）",
+                    "验证 IAR 安装目录是否在 PATH 环境变量中"
                 ]
             )
 

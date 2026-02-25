@@ -26,6 +26,7 @@ Implementation Sequence:
 
 import logging
 import re
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1343,21 +1344,227 @@ def verify_processed_a2l_file(
     return all_passed, messages
 
 
+def _clean_a2l_tool_directory(
+    a2l_tool_path: Path,
+    log_callback: Callable[[str], None]
+) -> int:
+    """清理 A2L 工具目录下的残留 A2L 和 ELF 文件
+
+    Args:
+        a2l_tool_path: A2L 工具目录路径
+        log_callback: 日志回调函数
+
+    Returns:
+        删除的文件数量
+    """
+    import shutil
+
+    if not a2l_tool_path.exists():
+        return 0
+
+    deleted_count = 0
+    patterns = ["*.a2l", "*.A2L", "*.elf", "*.ELF"]
+
+    for pattern in patterns:
+        for file_path in a2l_tool_path.glob(pattern):
+            try:
+                file_path.unlink()
+                log_callback(f"清理残留文件: {file_path.name}")
+                deleted_count += 1
+            except Exception as e:
+                log_callback(f"警告: 无法删除文件 {file_path.name}: {e}")
+
+    if deleted_count > 0:
+        log_callback(f"共清理 {deleted_count} 个残留文件")
+    else:
+        log_callback("无需清理残留文件")
+
+    return deleted_count
+
+
+def _copy_files_to_tool_directory(
+    source_a2l_path: Path,
+    source_elf_path: Path,
+    a2l_tool_path: Path,
+    log_callback: Callable[[str], None]
+) -> Tuple[Path, Path]:
+    """复制 A2L 和 ELF 文件到 A2L 工具目录
+
+    Args:
+        source_a2l_path: 源 A2L 文件路径
+        source_elf_path: 源 ELF 文件路径
+        a2l_tool_path: A2L 工具目录路径
+        log_callback: 日志回调函数
+
+    Returns:
+        (目标 A2L 路径, 目标 ELF 路径) 元组
+
+    Raises:
+        FileNotFoundError: 源文件不存在
+        FileError: 复制失败
+    """
+    import shutil
+
+    # 确保目标目录存在
+    a2l_tool_path.mkdir(parents=True, exist_ok=True)
+
+    # 复制 A2L 文件
+    dest_a2l = a2l_tool_path / source_a2l_path.name
+    try:
+        shutil.copy2(source_a2l_path, dest_a2l)
+        log_callback(f"复制 A2L 文件: {source_a2l_path.name} -> {dest_a2l}")
+    except Exception as e:
+        raise FileError(f"复制 A2L 文件失败: {e}", suggestions=[
+            "检查源文件是否存在",
+            "检查目标目录权限"
+        ])
+
+    # 复制 ELF 文件
+    dest_elf = a2l_tool_path / source_elf_path.name
+    try:
+        shutil.copy2(source_elf_path, dest_elf)
+        log_callback(f"复制 ELF 文件: {source_elf_path.name} -> {dest_elf}")
+    except Exception as e:
+        raise FileError(f"复制 ELF 文件失败: {e}", suggestions=[
+            "检查源文件是否存在",
+            "检查目标目录权限"
+        ])
+
+    return dest_a2l, dest_elf
+
+
+def _update_a2l_addresses(
+    a2l_path: Path,
+    elf_path: Path,
+    timeout: int,
+    log_callback: Callable[[str], None]
+) -> bool:
+    """使用 MATLAB 更新 A2L 文件中的变量地址
+
+    Args:
+        a2l_path: A2L 文件路径
+        elf_path: ELF 文件路径
+        timeout: 超时时间（秒）
+        log_callback: 日志回调函数
+
+    Returns:
+        成功返回 True
+
+    Raises:
+        ProcessError: MATLAB 执行失败
+        ProcessTimeoutError: 执行超时
+    """
+    # 导入 MATLAB Engine API
+    try:
+        import matlab.engine
+    except ImportError as e:
+        error_msg = "MATLAB Engine API for Python 未安装"
+        log_callback(f"错误: {error_msg}")
+        logger.error(error_msg)
+
+        raise ProcessError(
+            "MATLAB",
+            error_msg,
+            suggestions=[
+                "安装 MATLAB R2020a 或更高版本",
+                "在 MATLAB 目录执行: cd extern/engines/python && python setup.py install",
+                "验证 import matlab.engine 可用"
+            ]
+        )
+
+    # 构建 MATLAB 命令
+    a2l_path_matlab = a2l_path.as_posix()
+    elf_path_matlab = elf_path.as_posix()
+    matlab_command = f"rtw.asap2SetAddress('{a2l_path_matlab}', '{elf_path_matlab}')"
+
+    log_callback(f"执行 MATLAB 命令更新变量地址...")
+    log_callback(f"  A2L: {a2l_path.name}")
+    log_callback(f"  ELF: {elf_path.name}")
+
+    start_time = time.monotonic()
+    engine = None
+
+    try:
+        # 启动 MATLAB 引擎
+        log_callback("正在启动 MATLAB 引擎...")
+        engine = matlab.engine.start_matlab()
+
+        elapsed = time.monotonic() - start_time
+        log_callback(f"MATLAB 引擎已启动（耗时 {elapsed:.2f} 秒）")
+
+        # 设置工作目录为 A2L 文件所在目录
+        engine.cd(str(a2l_path.parent))
+        log_callback(f"MATLAB 工作目录: {a2l_path.parent}")
+
+        # 执行命令
+        command_start = time.monotonic()
+        log_callback(f"执行: {matlab_command}")
+
+        engine.eval(matlab_command, nargout=0)
+
+        command_elapsed = time.monotonic() - command_start
+        log_callback(f"MATLAB 命令执行成功（耗时 {command_elapsed:.2f} 秒）")
+
+        return True
+
+    except matlab.engine.MatlabExecutionError as e:
+        error_msg = f"MATLAB 命令执行失败: {str(e)}"
+        log_callback(f"错误: {error_msg}")
+        logger.error(error_msg, exc_info=True)
+
+        raise ProcessError(
+            "MATLAB",
+            error_msg,
+            suggestions=[
+                "检查 MATLAB 安装和版本",
+                "验证 rtw.asap2SetAddress 函数可用",
+                "查看 MATLAB 详细错误日志",
+                "验证 A2L 文件格式"
+            ]
+        )
+
+    except Exception as e:
+        error_msg = f"MATLAB 执行异常: {str(e)}"
+        log_callback(f"错误: {error_msg}")
+        logger.error(error_msg, exc_info=True)
+
+        raise ProcessError(
+            "MATLAB",
+            error_msg,
+            suggestions=[
+                "查看详细日志",
+                "检查 MATLAB 环境",
+                "验证系统资源"
+            ]
+        )
+
+    finally:
+        # 确保 MATLAB 引擎关闭
+        if engine is not None:
+            try:
+                engine.quit()
+                log_callback("MATLAB 引擎已关闭")
+            except Exception as e:
+                logger.warning(f"MATLAB 引擎关闭时出错（忽略）: {e}")
+
+
 def execute_xcp_header_replacement_stage(
     config: StageConfig,
     context: BuildContext
 ) -> StageResult:
-    """执行 XCP 头文件替换阶段
+    """执行 A2L 文件完整处理阶段
 
-    Story 2.10 - 任务 7.1-7.5:
-    - 实现 execute_stage() 函数（统一接口）
-    - 函数签名：`execute_stage(config: StageConfig, context: BuildContext) -> StageResult`
-    - 从 BuildContext 获取 A2L 文件路径（前一阶段输出）
-    - 检查 A2L 文件是否存在（前置条件）
-    - 调用子任务函数执行完整流程
+    完整流程：
+    1. 清理 A2L 工具目录下的残留 A2L 和 ELF 文件
+    2. 复制 A2L 文件（从配置路径）到 A2L 工具目录
+    3. 复制 ELF 文件到 A2L 工具目录
+    4. 调用 MATLAB 更新变量地址
+    5. 裁剪 A2L（删除 IF_DATA XCP 块）
+    6. 替换 XCP 头文件
+    7. 保存到 output 子目录
 
     Args:
-        config: 阶段配置（StageConfig 类型，custom_config 为 A2LHeaderReplacementConfig）
+        config: 阶段配置
         context: 构建上下文
 
     Returns:
@@ -1366,47 +1573,14 @@ def execute_xcp_header_replacement_stage(
     # 记录阶段开始
     log_callback = context.log_callback or (lambda msg: logger.info(msg))
     start_time = time.monotonic()
-    log_callback("开始 XCP 头文件替换阶段")
-    logger.info("开始 XCP 头文件替换阶段")
+    log_callback("=== 开始 A2L 文件处理阶段 ===")
+    logger.info("开始 A2L 文件处理阶段")
 
     try:
-        # 获取配置 (任务 7.3)
-        # 使用 getattr 安全获取 custom_config，如果不存在则创建默认配置
-        a2l_config = getattr(config, 'custom_config', None)
-        if not isinstance(a2l_config, A2LHeaderReplacementConfig):
-            # 如果 custom_config 不是 A2LHeaderReplacementConfig，创建默认配置
-            a2l_config = A2LHeaderReplacementConfig()
-            # 尝试从 context 获取配置
-            a2l_config.a2l_source_path = context.state.get("a2l_output_path", "") or context.config.get("a2l_path", "")
-            a2l_config.output_dir = context.state.get("target_path", "") or context.config.get("target_path", "")
-
-        # 前置条件检查：获取 A2L 文件路径 (任务 7.3, 7.4)
-        if not a2l_config.a2l_source_path:
-            # 从 BuildContext 获取前一阶段输出的 A2L 文件路径
-            a2l_source_path = context.state.get("a2l_output_path") or context.state.get("iar_a2l_path")
-
-            if not a2l_source_path:
-                error_msg = "未找到 A2L 文件路径，请确保 IAR 编译阶段或 A2L 更新阶段已成功执行"
-                log_callback(f"错误: {error_msg}")
-                logger.error(error_msg)
-
-                return StageResult(
-                    status=StageStatus.FAILED,
-                    message=error_msg,
-                    suggestions=[
-                        "检查 IAR 编译阶段是否成功生成 A2L 文件",
-                        "检查 A2L 更新阶段是否成功执行",
-                        "查看 BuildContext 中的文件路径"
-                    ]
-                )
-
-            a2l_config.a2l_source_path = str(a2l_source_path)
-
-        a2l_path = Path(a2l_config.a2l_source_path)
-
-        # 前置条件检查：验证 A2L 文件存在 (任务 7.4)
-        if not a2l_path.exists():
-            error_msg = f"A2L 文件不存在: {a2l_path}"
+        # 获取配置
+        a2l_tool_path_str = context.config.get("a2l_tool_path", "")
+        if not a2l_tool_path_str:
+            error_msg = "未配置 A2L 工具路径"
             log_callback(f"错误: {error_msg}")
             logger.error(error_msg)
 
@@ -1414,15 +1588,137 @@ def execute_xcp_header_replacement_stage(
                 status=StageStatus.FAILED,
                 message=error_msg,
                 suggestions=[
-                    "检查 IAR 编译阶段是否成功",
-                    "检查 A2L 更新阶段是否成功",
-                    "验证文件路径是否正确"
+                    "在项目配置中设置 a2l_tool_path",
+                    "确保路径指向有效的 A2L 工具目录"
                 ]
             )
 
-        # 任务 2: 读取 XCP 头文件模板
+        a2l_tool_path = Path(a2l_tool_path_str)
+
+        # 获取源 A2L 文件路径（从配置路径）
+        source_a2l_path_str = context.config.get("a2l_path", "")
+        if not source_a2l_path_str:
+            error_msg = "未配置 A2L 源文件路径"
+            log_callback(f"错误: {error_msg}")
+            logger.error(error_msg)
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=error_msg,
+                suggestions=[
+                    "在项目配置中设置 a2l_path",
+                    "确保路径指向有效的 A2L 文件"
+                ]
+            )
+
+        source_a2l_path = Path(source_a2l_path_str)
+
+        # 获取 ELF 文件路径（优先从 context.state，否则从 IAR 工程路径推导）
+        source_elf_path_str = context.state.get("iar_elf_path", "") or context.config.get("elf_path", "")
+
+        if not source_elf_path_str:
+            # 从 IAR 工程路径推导 ELF 路径
+            # 规则：IAR工程目录/M7/Debug/Exe/CYT4BF_M7_Master.elf
+            iar_project_path = context.config.get("iar_project_path", "")
+            if iar_project_path:
+                iar_dir = Path(iar_project_path).parent  # 获取 .eww 文件所在目录
+                # 推导 ELF 路径：{iar_dir}/M7/Debug/Exe/CYT4BF_M7_Master.elf
+                source_elf_path_str = str(iar_dir / "M7" / "Debug" / "Exe" / "CYT4BF_M7_Master.elf")
+                log_callback(f"从 IAR 工程路径推导 ELF 路径: {source_elf_path_str}")
+
+        if not source_elf_path_str:
+            error_msg = "未找到 ELF 文件路径，请配置 IAR 工程路径"
+            log_callback(f"错误: {error_msg}")
+            logger.error(error_msg)
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=error_msg,
+                suggestions=[
+                    "检查 IAR 工程路径配置",
+                    "确保 IAR 编译阶段已执行"
+                ]
+            )
+
+        source_elf_path = Path(source_elf_path_str)
+
+        # 验证源文件存在
+        if not source_a2l_path.exists():
+            error_msg = f"A2L 源文件不存在: {source_a2l_path}"
+            log_callback(f"错误: {error_msg}")
+            logger.error(error_msg)
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=error_msg,
+                suggestions=["检查 A2L 文件路径配置"]
+            )
+
+        if not source_elf_path.exists():
+            error_msg = f"ELF 源文件不存在: {source_elf_path}"
+            log_callback(f"错误: {error_msg}")
+            logger.error(error_msg)
+
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=error_msg,
+                suggestions=[
+                    "检查 IAR 编译是否成功",
+                    "验证 IAR 工程路径配置",
+                    f"预期 ELF 路径: {source_elf_path}"
+                ]
+            )
+
+        log_callback(f"A2L 源文件: {source_a2l_path}")
+        log_callback(f"ELF 源文件: {source_elf_path}")
+        log_callback(f"A2L 工具目录: {a2l_tool_path}")
+
+        # 步骤 1: 清理残留文件
+        log_callback("\n[步骤 1/6] 清理残留文件...")
+        _clean_a2l_tool_directory(a2l_tool_path, log_callback)
+
+        # 步骤 2-3: 复制文件到工具目录
+        log_callback("\n[步骤 2/6] 复制 A2L 和 ELF 文件到工具目录...")
         try:
-            template_path = Path(a2l_config.xcp_template_path)
+            dest_a2l, dest_elf = _copy_files_to_tool_directory(
+                source_a2l_path, source_elf_path, a2l_tool_path, log_callback
+            )
+        except FileError as e:
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=str(e),
+                error=e,
+                suggestions=e.suggestions
+            )
+
+        # 步骤 4: 使用 MATLAB 更新变量地址
+        log_callback("\n[步骤 3/6] 更新 A2L 变量地址...")
+        timeout = getattr(config, 'timeout', None) or get_stage_timeout("a2l_process")
+        try:
+            _update_a2l_addresses(dest_a2l, dest_elf, timeout, log_callback)
+        except (ProcessError, ProcessTimeoutError) as e:
+            return StageResult(
+                status=StageStatus.FAILED,
+                message=f"更新变量地址失败: {e}",
+                error=e,
+                suggestions=e.suggestions if hasattr(e, 'suggestions') else []
+            )
+
+        # 步骤 5: 裁剪 A2L（删除 IF_DATA XCP 块）
+        log_callback("\n[步骤 4/6] 裁剪 A2L 文件...")
+        try:
+            success, removed_count = remove_if_data_xcp_blocks(dest_a2l, log_callback)
+            if not success:
+                log_callback("警告: IF_DATA XCP 块删除可能不完整")
+        except (FileNotFoundError, FileError) as e:
+            log_callback(f"警告: 裁剪 A2L 时出错: {e}")
+
+        # 步骤 6: 替换 XCP 头文件
+        log_callback("\n[步骤 5/6] 替换 XCP 头文件...")
+
+        # 读取 XCP 头文件模板
+        template_path = a2l_tool_path / "奇瑞热管理XCP头文件.txt"
+        try:
             xcp_template = read_xcp_header_template(template_path, log_callback)
         except (FileNotFoundError, FileError) as e:
             error_msg = f"读取 XCP 头文件模板失败: {str(e)}"
@@ -1433,15 +1729,15 @@ def execute_xcp_header_replacement_stage(
                 status=StageStatus.FAILED,
                 message=error_msg,
                 error=e,
-                suggestions=e.suggestions if hasattr(e, 'suggestions') else [
-                    "检查模板文件路径",
-                    "确保模板文件存在于 resources/templates/ 目录",
-                    "验证模板文件格式正确"
+                suggestions=[
+                    "检查 A2L 工具路径配置",
+                    "确保模板文件存在于 A2L 工具目录下",
+                    "文件名应为: 奇瑞热管理XCP头文件.txt"
                 ]
             )
 
-        # 任务 3: 定位 XCP 头文件部分
-        header_section = find_xcp_header_section(a2l_path, log_callback)
+        # 定位 XCP 头文件部分
+        header_section = find_xcp_header_section(dest_a2l, log_callback)
         if not header_section:
             error_msg = "未找到 A2L 文件中的 XCP 头文件部分"
             log_callback(f"错误: {error_msg}")
@@ -1452,18 +1748,14 @@ def execute_xcp_header_replacement_stage(
                 message=error_msg,
                 suggestions=[
                     "检查 A2L 文件格式",
-                    "确认文件包含 XCP 头文件部分",
-                    "查看 A2L 文件内容，确认包含 /begin XCP 和 /end XCP 标记"
+                    "确认文件包含 /begin MOD_PAR 标记"
                 ]
             )
 
-        # 任务 4: 替换头部内容
+        # 替换头部内容
         try:
             updated_content = replace_xcp_header_content(
-                a2l_path,
-                header_section,
-                xcp_template,
-                log_callback
+                dest_a2l, header_section, xcp_template, log_callback
             )
         except FileError as e:
             error_msg = f"替换 XCP 头文件内容失败: {str(e)}"
@@ -1474,14 +1766,17 @@ def execute_xcp_header_replacement_stage(
                 status=StageStatus.FAILED,
                 message=error_msg,
                 error=e,
-                suggestions=e.suggestions if hasattr(e, 'suggestions') else [
-                    "检查文件权限",
-                    "检查磁盘空间",
-                    "查看详细日志获取更多信息"
-                ]
+                suggestions=e.suggestions
             )
 
-        # 任务 5: 保存更新后的文件
+        # 步骤 7: 保存到 output 目录
+        log_callback("\n[步骤 6/6] 保存最终 A2L 文件...")
+
+        # 创建输出配置
+        a2l_config = A2LHeaderReplacementConfig()
+        a2l_config.output_dir = str(a2l_tool_path / "output")
+        a2l_config.output_prefix = "tmsAPP_upAdress"
+
         try:
             output_path = save_updated_a2l_file(a2l_config, updated_content, log_callback)
         except FileError as e:
@@ -1493,14 +1788,10 @@ def execute_xcp_header_replacement_stage(
                 status=StageStatus.FAILED,
                 message=error_msg,
                 error=e,
-                suggestions=e.suggestions if hasattr(e, 'suggestions') else [
-                    "检查文件权限",
-                    "检查磁盘空间",
-                    "尝试以管理员身份运行"
-                ]
+                suggestions=e.suggestions
             )
 
-        # 任务 6: 验证文件替换成功
+        # 验证输出文件
         if not verify_a2l_replacement(output_path, xcp_template, log_callback):
             error_msg = "A2L 文件替换验证失败"
             log_callback(f"错误: {error_msg}")
@@ -1509,11 +1800,7 @@ def execute_xcp_header_replacement_stage(
             return StageResult(
                 status=StageStatus.FAILED,
                 message=error_msg,
-                suggestions=[
-                    "检查文件权限",
-                    "检查磁盘空间",
-                    "查看详细日志获取更多信息"
-                ]
+                suggestions=["检查输出文件", "查看详细日志"]
             )
 
         # 记录输出文件路径到 BuildContext
@@ -1522,19 +1809,20 @@ def execute_xcp_header_replacement_stage(
 
         # 计算执行时长
         elapsed = time.monotonic() - start_time
-        log_callback(f"XCP 头文件替换阶段完成，耗时 {elapsed:.2f} 秒")
-        logger.info(f"XCP 头文件替换阶段完成，耗时 {elapsed:.2f} 秒")
+        log_callback(f"\n=== A2L 文件处理阶段完成，耗时 {elapsed:.2f} 秒 ===")
+        log_callback(f"最终输出文件: {output_path}")
+        logger.info(f"A2L 文件处理阶段完成，耗时 {elapsed:.2f} 秒")
 
         return StageResult(
             status=StageStatus.COMPLETED,
-            message="A2L 头文件替换成功",
+            message="A2L 文件处理成功",
             output_files=[str(output_path)],
             execution_time=elapsed
         )
 
     except Exception as e:
-        # 未预期的异常 (任务 9.5)
-        error_msg = f"XCP 头文件替换阶段异常: {str(e)}"
+        # 未预期的异常
+        error_msg = f"A2L 文件处理阶段异常: {str(e)}"
         log_callback(f"错误: {error_msg}")
         logger.error(error_msg, exc_info=True)
 

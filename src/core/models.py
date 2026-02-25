@@ -50,10 +50,11 @@ class ProjectConfig:
 
     # 必需路径
     simulink_path: str = ""           # Simulink 工程路径
-    matlab_code_path: str = ""        # MATLAB 代码路径
+    matlab_code_path: str = ""        # IAR-MATLAB 代码路径（IAR工程中存放MATLAB代码的目录）
     a2l_path: str = ""                # A2L 文件路径
     target_path: str = ""             # 目标文件路径
     iar_project_path: str = ""        # IAR 工程路径
+    iar_tool_path: str = ""           # IAR 工具路径（IarBuild.exe 文件路径或所在目录）
     a2l_tool_path: str = ""           # A2L 工具路径（包含 XCP 头文件模板和处理脚本）
 
     # 可选字段（预留 Phase 2 扩展）
@@ -104,10 +105,12 @@ class ProjectConfig:
         required_fields = [
             ("name", "项目名称"),
             ("simulink_path", "Simulink 工程路径"),
-            ("matlab_code_path", "MATLAB 代码路径"),
             ("a2l_path", "A2L 文件路径"),
-            ("target_path", "目标文件路径"),
+            ("iar_tool_path", "IAR 工具路径"),
             ("iar_project_path", "IAR 工程路径"),
+            ("matlab_code_path", "IAR-MATLAB 代码路径"),
+            ("a2l_tool_path", "A2L 工具路径"),
+            ("target_path", "目标文件夹"),
         ]
 
         for field_key, field_name in required_fields:

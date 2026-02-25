@@ -440,15 +440,39 @@ def process_cal_file(
 
     try:
         if log_callback:
+            log_callback(f"检查 Cal.c 文件: {cal_file}")
+
+        # 读取文件内容，检查是否已处理
+        content = read_file_with_encoding(cal_file)
+
+        # 检查是否已包含前缀
+        has_prefix = "ASW_ATECH_START_SEC_CALIB" in content
+        # 检查是否已包含后缀
+        has_suffix = "ASW_ATECH_STOP_SEC_CALIB" in content
+
+        if has_prefix and has_suffix:
+            if log_callback:
+                log_callback("Cal.c 已包含标定代码标记，跳过处理")
+            return True
+
+        if log_callback:
             log_callback(f"开始处理 Cal.c 文件: {cal_file}")
 
-        # 插入前缀
-        if not insert_cal_prefix(cal_file, log_callback):
-            return False
+        # 只在需要时插入前缀
+        if not has_prefix:
+            if not insert_cal_prefix(cal_file, log_callback):
+                return False
+        else:
+            if log_callback:
+                log_callback("前缀标记已存在，跳过插入")
 
-        # 插入后缀
-        if not insert_cal_suffix(cal_file, log_callback):
-            return False
+        # 只在需要时插入后缀
+        if not has_suffix:
+            if not insert_cal_suffix(cal_file, log_callback):
+                return False
+        else:
+            if log_callback:
+                log_callback("后缀标记已存在，跳过插入")
 
         # 最终验证（暂时跳过括号匹配检查）
         if not verify_cal_modification(cal_file, log_callback, check_brackets=False):
