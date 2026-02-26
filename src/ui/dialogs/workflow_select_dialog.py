@@ -94,8 +94,10 @@ class WorkflowSelectDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle("📋 选择执行阶段")
-        self.setMinimumWidth(600)
-        self.setMinimumHeight(500)
+        self.setMinimumWidth(500)  # 降低最小宽度，适应小屏幕
+        self.setMinimumHeight(400)  # 降低最小高度，适应小屏幕
+        # 设置初始大小为合理尺寸
+        self.resize(650, 550)
 
         # 应用主题样式
         self.setStyleSheet("""
@@ -129,7 +131,36 @@ class WorkflowSelectDialog(QDialog):
         desc_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
         main_layout.addWidget(desc_label)
 
-        # ===== 阶段列表区域 =====
+        # ===== 阶段列表区域（添加滚动支持）=====
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                background-color: transparent;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background-color: #1e293b;
+                width: 12px;
+                border-radius: 6px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #475569;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #64748b;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        # 阶段容器
         stages_frame = QFrame()
         stages_frame.setStyleSheet("""
             QFrame {
@@ -144,14 +175,27 @@ class WorkflowSelectDialog(QDialog):
 
         # 创建阶段复选框
         for stage_id, stage_info in STAGE_DEFINITIONS.items():
+            # 阶段卡片
+            stage_card = QFrame()
+            stage_card.setStyleSheet("""
+                QFrame {
+                    background-color: #0f172a;
+                    border-radius: 6px;
+                    padding: 8px;
+                }
+            """)
+            card_layout = QVBoxLayout(stage_card)
+            card_layout.setSpacing(4)
+            card_layout.setContentsMargins(12, 8, 12, 8)
+
             checkbox = QCheckBox(f"{stage_info['icon']} {stage_info['name']}")
             checkbox.setStyleSheet("""
                 QCheckBox {
                     color: #f1f5f9;
                     font-size: 14px;
-                    font-weight: 500;
+                    font-weight: 600;
                     spacing: 8px;
-                    padding: 8px 0;
+                    padding: 4px 0;
                 }
                 QCheckBox::indicator {
                     width: 20px;
@@ -172,26 +216,40 @@ class WorkflowSelectDialog(QDialog):
             checkbox.stateChanged.connect(lambda state, sid=stage_id: self._on_stage_changed(sid, state))
 
             self._stage_checkboxes[stage_id] = checkbox
-            stages_layout.addWidget(checkbox)
+            card_layout.addWidget(checkbox)
 
             # 添加描述标签
             desc = QLabel(f"    {stage_info['description']}")
-            desc.setStyleSheet("color: #64748b; font-size: 12px; margin-left: 28px;")
-            stages_layout.addWidget(desc)
+            desc.setStyleSheet("color: #94a3b8; font-size: 12px; margin-left: 28px; margin-top: 2px;")
+            desc.setWordWrap(True)  # 支持文本换行
+            card_layout.addWidget(desc)
 
-        main_layout.addWidget(stages_frame)
+            stages_layout.addWidget(stage_card)
+
+        # 添加底部弹性空间
+        stages_layout.addStretch()
+
+        # 设置滚动区域的内容
+        scroll_area.setWidget(stages_frame)
+
+        # 设置滚动区域的最小高度，确保在小屏幕上也能显示部分内容
+        scroll_area.setMinimumHeight(300)
+
+        main_layout.addWidget(scroll_area, 1)  # 添加伸展因子
 
         # ===== 快捷操作按钮 =====
         quick_actions = QHBoxLayout()
         quick_actions.setSpacing(8)
 
-        select_all_btn = QPushButton("全选")
+        select_all_btn = QPushButton("✓ 全选")
         select_all_btn.setProperty("secondary", True)
+        select_all_btn.setMinimumHeight(36)
         select_all_btn.clicked.connect(self._select_all)
         quick_actions.addWidget(select_all_btn)
 
-        deselect_all_btn = QPushButton("全不选")
+        deselect_all_btn = QPushButton("✗ 全不选")
         deselect_all_btn.setProperty("secondary", True)
+        deselect_all_btn.setMinimumHeight(36)
         deselect_all_btn.clicked.connect(self._deselect_all)
         quick_actions.addWidget(deselect_all_btn)
 
@@ -202,7 +260,6 @@ class WorkflowSelectDialog(QDialog):
         # ===== 按钮区域 =====
         button_layout = QHBoxLayout()
         button_layout.setSpacing(12)
-        button_layout.addStretch()
 
         cancel_btn = QPushButton("取消")
         cancel_btn.setMinimumHeight(44)
@@ -210,10 +267,12 @@ class WorkflowSelectDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
 
-        confirm_btn = QPushButton("✓ 确认")
+        button_layout.addStretch()
+
+        confirm_btn = QPushButton("✓ 确认选择")
         confirm_btn.setProperty("primary", True)
         confirm_btn.setMinimumHeight(44)
-        confirm_btn.setMinimumWidth(120)
+        confirm_btn.setMinimumWidth(140)
         confirm_btn.clicked.connect(self._confirm_selection)
         button_layout.addWidget(confirm_btn)
 

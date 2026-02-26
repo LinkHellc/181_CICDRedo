@@ -574,6 +574,7 @@ class MainWindow(QMainWindow):
         self.path_labels["target_path"].setText(config.target_path)
         self.path_labels["iar_project_path"].setText(config.iar_project_path)
         self.path_labels["iar_tool_path"].setText(config.iar_tool_path)
+        self.path_labels["a2l_tool_path"].setText(config.a2l_tool_path)  # 修复: 添加 A2L 工具路径填充
 
         # 启用"验证配置"、"选择阶段"和"开始构建"按钮
         self.validate_btn.setEnabled(True)

@@ -57,11 +57,8 @@ def check_environment() -> bool:
     except ImportError:
         errors.append("PyQt6 未安装")
 
-    # 检查 MATLAB Engine（可选，仅在使用 MATLAB 功能时需要）
-    try:
-        import matlab.engine
-    except ImportError:
-        warnings.append("MATLAB Engine for Python 未安装（MATLAB 相关功能将不可用）")
+    # ADR-005: MATLAB Engine 不再是必需依赖，已移除此检查
+    # MATLAB 代码生成功能已改为预留接口
 
     # 显示警告（不阻止启动）
     if warnings:
