@@ -491,7 +491,9 @@ def execute_stage(config: StageConfig, context: BuildContext) -> StageResult:
 
 # XCP 头文件定位正则表达式 (任务 3.2, 3.3)
 # 替换范围：从文件开头到第一个 /end MOD_PAR
+XCP_HEADER_START_PATTERN = re.compile(r'/begin\s+MOD_PAR', re.IGNORECASE)
 XCP_HEADER_END_PATTERN = re.compile(r'/end\s+MOD_PAR', re.IGNORECASE)
+XCP_HEADER_SECTION_PATTERN = re.compile(r'/begin\s+MOD_PAR.*?/end\s+MOD_PAR', re.DOTALL | re.IGNORECASE)
 
 
 def read_xcp_header_template(

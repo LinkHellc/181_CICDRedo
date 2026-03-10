@@ -160,8 +160,22 @@ class A2LAddressUpdater:
             updated_lines = lines.copy()
 
             for var_name, var_info in a2l_variables.items():
+                matched_addr = None
+                match_type = ""
+
+                # 1. 精确匹配
                 if var_name in elf_symbols:
-                    new_addr = elf_symbols[var_name]
+                    matched_addr = elf_symbols[var_name]
+                    match_type = "exact"
+                # 2. 叶子节点匹配（处理点号分隔的层级变量名）
+                elif "." in var_name:
+                    leaf_name = var_name.split(".")[-1]
+                    if leaf_name in elf_symbols:
+                        matched_addr = elf_symbols[leaf_name]
+                        match_type = "leaf"
+
+                if matched_addr is not None:
+                    new_addr = matched_addr
                     old_addr = var_info.address
 
                     # 更新地址行
@@ -177,7 +191,7 @@ class A2LAddressUpdater:
                         result.updated_variables.append(var_name)
 
                         logger.debug(
-                            f"更新变量 {var_name}: "
+                            f"更新变量 {var_name} ({match_type}): "
                             f"0x{old_addr:08X} -> 0x{new_addr:08X}"
                         )
                 else:
@@ -268,14 +282,23 @@ class A2LAddressUpdater:
             updated_lines = lines.copy()
 
             for var_name, var_info in a2l_variables.items():
-                if var_name in symbol_map:
-                    new_addr = symbol_map[var_name]
+                matched_addr = None
 
+                # 1. 精确匹配
+                if var_name in symbol_map:
+                    matched_addr = symbol_map[var_name]
+                # 2. 叶子节点匹配（处理点号分隔的层级变量名）
+                elif "." in var_name:
+                    leaf_name = var_name.split(".")[-1]
+                    if leaf_name in symbol_map:
+                        matched_addr = symbol_map[leaf_name]
+
+                if matched_addr is not None:
                     if var_info.address_line > 0:
                         old_line = lines[var_info.address_line - 1]
                         new_line = old_line.replace(
                             var_info.address_str,
-                            f"0x{new_addr:08X}"
+                            f"0x{matched_addr:08X}"
                         )
                         updated_lines[var_info.address_line - 1] = new_line
 

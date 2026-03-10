@@ -17,9 +17,16 @@ A2L File Structure (relevant parts):
     /begin MEASUREMENT
         name "MeasurementName"
         ...
-        address 0x87654321
+        ECU_ADDRESS 0x87654321
         ...
     /end MEASUREMENT
+
+    /begin AXIS_PTS
+        /* Name */ AxisVarName
+        ...
+        /* ECU Address */ 0xABCDEF00
+        ...
+    /end AXIS_PTS
 """
 
 import logging
@@ -43,11 +50,11 @@ class A2LParseError(Exception):
 class A2LVariable:
     """A2L 变量信息
 
-    表示 A2L 文件中的单个变量（CHARACTERISTIC 或 MEASUREMENT）。
+    表示 A2L 文件中的单个变量（CHARACTERISTIC、MEASUREMENT 或 AXIS_PTS）。
 
     Attributes:
         name: 变量名称
-        var_type: 变量类型（CHARACTERISTIC 或 MEASUREMENT）
+        var_type: 变量类型（CHARACTERISTIC、MEASUREMENT 或 AXIS_PTS）
         address: 当前地址值
         address_str: 地址字符串（原始格式）
         line_start: 块开始行号
@@ -55,7 +62,7 @@ class A2LVariable:
         address_line: 地址所在行号
     """
     name: str = ""
-    var_type: str = ""  # CHARACTERISTIC 或 MEASUREMENT
+    var_type: str = ""  # CHARACTERISTIC、MEASUREMENT 或 AXIS_PTS
     address: int = 0
     address_str: str = ""
     line_start: int = 0
@@ -80,21 +87,21 @@ class A2LParser:
     """
 
     # 正则表达式模式
-    # 匹配 /begin CHARACTERISTIC 或 /begin MEASUREMENT（标准格式：带变量名）
+    # 匹配 /begin CHARACTERISTIC、MEASUREMENT 或 AXIS_PTS（标准格式：带变量名）
     BLOCK_START_PATTERN = re.compile(
-        r'/begin\s+(CHARACTERISTIC|MEASUREMENT)\s+(\S+)',
+        r'/begin\s+(CHARACTERISTIC|MEASUREMENT|AXIS_PTS)\s+(\S+)',
         re.IGNORECASE
     )
 
-    # 匹配 /begin CHARACTERISTIC 或 /begin MEASUREMENT（Simulink 格式：不带变量名）
+    # 匹配 /begin CHARACTERISTIC、MEASUREMENT 或 AXIS_PTS（Simulink 格式：不带变量名）
     BLOCK_START_PATTERN_SIMULINK = re.compile(
-        r'/begin\s+(CHARACTERISTIC|MEASUREMENT)\s*$',
+        r'/begin\s+(CHARACTERISTIC|MEASUREMENT|AXIS_PTS)\s*$',
         re.IGNORECASE
     )
 
-    # 匹配 /end CHARACTERISTIC 或 /end MEASUREMENT
+    # 匹配 /end CHARACTERISTIC、MEASUREMENT 或 AXIS_PTS
     BLOCK_END_PATTERN = re.compile(
-        r'/end\s+(CHARACTERISTIC|MEASUREMENT)',
+        r'/end\s+(CHARACTERISTIC|MEASUREMENT|AXIS_PTS)',
         re.IGNORECASE
     )
 
@@ -102,6 +109,12 @@ class A2LParser:
     ADDRESS_PATTERN = re.compile(
         r'^\s*address\s+(0x[0-9A-Fa-f]+|\d+)\s*$',
         re.IGNORECASE | re.MULTILINE
+    )
+
+    # 匹配地址行（MEASUREMENT格式：ECU_ADDRESS）
+    ADDRESS_PATTERN_ECU = re.compile(
+        r'^\s*ECU_ADDRESS\s+(0x[0-9A-Fa-f]+|\d+)',
+        re.IGNORECASE
     )
 
     # 匹配 Simulink 格式的名称行：/* Name */ VarName
@@ -207,11 +220,13 @@ class A2LParser:
             return f.read().decode('utf-8', errors='ignore')
 
     def _parse_blocks(self):
-        """解析 CHARACTERISTIC 和 MEASUREMENT 块
+        """解析 CHARACTERISTIC、MEASUREMENT 和 AXIS_PTS 块
 
-        支持两种格式：
+        支持多种格式：
         1. 标准格式：/begin CHARACTERISTIC VarName ... address 0x...
-        2. Simulink 格式：/begin CHARACTERISTIC ... /* Name */ VarName ... /* ECU Address */ 0x...
+        2. Simulink格式：/begin CHARACTERISTIC ... /* Name */ VarName ... /* ECU Address */ 0x...
+        3. MEASUREMENT格式：/begin MEASUREMENT ... /* Name */ VarName ... ECU_ADDRESS 0x...
+        4. AXIS_PTS格式：/begin AXIS_PTS ... /* Name */ VarName ... /* ECU Address */ 0x...
         """
         current_block: Optional[A2LVariable] = None
         block_depth = 0
@@ -273,6 +288,20 @@ class A2LParser:
                 addr_match = self.ADDRESS_PATTERN.match(line)
                 if addr_match:
                     addr_str = addr_match.group(1)
+                    current_block.address_str = addr_str
+                    current_block.address_line = line_num
+
+                    # 解析地址值
+                    if addr_str.lower().startswith('0x'):
+                        current_block.address = int(addr_str, 16)
+                    else:
+                        current_block.address = int(addr_str)
+                    continue
+
+                # 查找地址（MEASUREMENT格式：ECU_ADDRESS）
+                addr_match_ecu = self.ADDRESS_PATTERN_ECU.search(line)
+                if addr_match_ecu:
+                    addr_str = addr_match_ecu.group(1)
                     current_block.address_str = addr_str
                     current_block.address_line = line_num
 

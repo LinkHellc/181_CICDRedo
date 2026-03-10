@@ -127,7 +127,7 @@ class WorkflowSelectDialog(QDialog):
         title_label.setStyleSheet("font-size: 20px; font-weight: 700; color: #f1f5f9;")
         main_layout.addWidget(title_label)
 
-        desc_label = QLabel("勾选要执行的阶段，依赖的阶段将自动启用")
+        desc_label = QLabel("勾选要执行的阶段，各阶段独立运行")
         desc_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
         main_layout.addWidget(desc_label)
 
@@ -288,13 +288,11 @@ class WorkflowSelectDialog(QDialog):
                 self._stage_checkboxes[stage.name].setChecked(stage.enabled)
 
     def _on_stage_changed(self, stage_id: str, state: int):
-        """处理阶段选择变化"""
-        if state == Qt.CheckState.Checked.value:
-            # 自动启用依赖的阶段
-            dependencies = STAGE_DEFINITIONS.get(stage_id, {}).get('dependencies', [])
-            for dep in dependencies:
-                if dep in self._stage_checkboxes:
-                    self._stage_checkboxes[dep].setChecked(True)
+        """处理阶段选择变化
+
+        各阶段独立选择，不级联依赖关系。
+        """
+        pass
 
     def _select_all(self):
         """全选所有阶段"""
